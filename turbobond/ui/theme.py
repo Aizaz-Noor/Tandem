@@ -336,6 +336,14 @@ class Fonts:
         return ctk.CTkFont(family=cls._BODY_FAMILY, size=12, weight="bold")
 
     @classmethod
+    def button(cls) -> ctk.CTkFont:
+        return ctk.CTkFont(family=cls._BODY_FAMILY, size=12, weight="bold")
+
+    @classmethod
+    def caption(cls) -> ctk.CTkFont:
+        return ctk.CTkFont(family=cls._BODY_FAMILY, size=11, weight="normal")
+
+    @classmethod
     def footer(cls) -> ctk.CTkFont:
         return ctk.CTkFont(family=cls._BODY_FAMILY, size=11, weight="normal")
 

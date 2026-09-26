@@ -150,6 +150,82 @@ class TestSystemProxyWindows:
             assert proxy.disable_proxy() is False
             assert proxy.is_proxy_set() is False
 
+    @patch("sys.platform", "win32")
+    def test_windows_localhost_proxy_not_backed_up(self):
+        """Pre-existing localhost proxy must NOT be treated as user's original proxy."""
+        proxy = SystemProxyConfig()
+
+        mock_winreg = MagicMock()
+        mock_key = MagicMock()
+        mock_winreg.OpenKey.return_value.__enter__.return_value = mock_key
+        mock_winreg.HKEY_CURRENT_USER = 1
+        mock_winreg.KEY_READ = 2
+        mock_winreg.KEY_SET_VALUE = 4
+        mock_winreg.REG_DWORD = 4
+        mock_winreg.REG_SZ = 1
+
+        def mock_query(key, name):
+            if name == "ProxyEnable":
+                return (1, 4)
+            elif name == "ProxyServer":
+                return ("127.0.0.1:8080", 1)
+            elif name == "ProxyOverride":
+                return (DEFAULT_PROXY_OVERRIDE, 1)
+            raise FileNotFoundError()
+
+        mock_winreg.QueryValueEx.side_effect = mock_query
+
+        mock_ctypes = MagicMock()
+        mock_wininet = MagicMock()
+        mock_ctypes.windll.wininet = mock_wininet
+        mock_wininet.InternetSetOptionW.return_value = 1
+
+        with patch.dict("sys.modules", {"winreg": mock_winreg, "ctypes": mock_ctypes}):
+            assert proxy.enable_proxy("127.0.0.1", 8080) is True
+
+            # Localhost must be discarded from backup
+            assert proxy._orig_proxy_enable == 0
+            assert proxy._orig_proxy_server == ""
+            assert proxy._proxy_server_existed is False
+
+            # When disabled, must delete ProxyServer and set ProxyEnable=0
+            assert proxy.disable_proxy() is True
+            mock_winreg.SetValueEx.assert_any_call(mock_key, "ProxyEnable", 0, mock_winreg.REG_DWORD, 0)
+            mock_winreg.DeleteValue.assert_any_call(mock_key, "ProxyServer")
+
+    @patch("sys.platform", "win32")
+    def test_cleanup_orphaned_proxy_windows(self):
+        """cleanup_orphaned_proxy resets localhost proxy and notifies WinINet."""
+        mock_winreg = MagicMock()
+        mock_key = MagicMock()
+        mock_winreg.OpenKey.return_value.__enter__.return_value = mock_key
+        mock_winreg.HKEY_CURRENT_USER = 1
+        mock_winreg.KEY_READ = 2
+        mock_winreg.KEY_SET_VALUE = 4
+        mock_winreg.REG_DWORD = 4
+        mock_winreg.REG_SZ = 1
+
+        def mock_query(key, name):
+            if name == "ProxyEnable":
+                return (1, 4)
+            elif name == "ProxyServer":
+                return ("127.0.0.1:8080", 1)
+            raise FileNotFoundError()
+
+        mock_winreg.QueryValueEx.side_effect = mock_query
+
+        mock_ctypes = MagicMock()
+        mock_wininet = MagicMock()
+        mock_ctypes.windll.wininet = mock_wininet
+        mock_wininet.InternetSetOptionW.return_value = 1
+
+        with patch.dict("sys.modules", {"winreg": mock_winreg, "ctypes": mock_ctypes}):
+            assert SystemProxyConfig.cleanup_orphaned_proxy() is True
+            mock_winreg.SetValueEx.assert_any_call(mock_key, "ProxyEnable", 0, mock_winreg.REG_DWORD, 0)
+            mock_winreg.DeleteValue.assert_any_call(mock_key, "ProxyServer")
+            assert mock_wininet.InternetSetOptionW.call_count == 2
+
+
 
 class TestSystemProxyLinux:
     """Test Linux proxy configuration (GNOME and fallback)."""

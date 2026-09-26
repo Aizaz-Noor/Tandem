@@ -11,12 +11,22 @@ import subprocess
 from typing import Optional
 
 
+import atexit
+
 WINDOWS_INTERNET_SETTINGS_KEY = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings"
 DEFAULT_PROXY_OVERRIDE = "localhost;127.*;10.*;192.168.*;<local>"
 
 GNOME_PROXY_SCHEMA = "org.gnome.system.proxy"
 GNOME_HTTP_SCHEMA = "org.gnome.system.proxy.http"
 GNOME_HTTPS_SCHEMA = "org.gnome.system.proxy.https"
+
+
+def is_localhost_proxy(proxy_str: Optional[str]) -> bool:
+    """Return True if proxy string points to 127.0.0.1, localhost, or ::1."""
+    if not proxy_str:
+        return False
+    s = proxy_str.lower().strip()
+    return "127.0.0.1" in s or "localhost" in s or "::1" in s or "127." in s
 
 
 class SystemProxyConfig:
@@ -42,6 +52,12 @@ class SystemProxyConfig:
             self._proxy_env_path = proxy_env_path
         else:
             self._proxy_env_path = os.path.expanduser("~/.config/turbobond/proxy_env")
+
+        # Automatically clean up proxy if Python exits unexpectedly
+        try:
+            atexit.register(self.disable_proxy)
+        except Exception:
+            pass
 
     def enable_proxy(self, host: str = "127.0.0.1", port: int = 8080) -> bool:
         """
@@ -134,16 +150,25 @@ class SystemProxyConfig:
                         winreg.KEY_READ
                     ) as key:
                         try:
+                            val, _ = winreg.QueryValueEx(key, "ProxyServer")
+                            self._orig_proxy_server = str(val)
+                            self._proxy_server_existed = True
+                        except FileNotFoundError:
+                            self._orig_proxy_server = ""
+                            self._proxy_server_existed = False
+
+                        try:
                             val, _ = winreg.QueryValueEx(key, "ProxyEnable")
                             self._orig_proxy_enable = int(val)
                         except FileNotFoundError:
                             self._orig_proxy_enable = 0
 
-                        try:
-                            val, _ = winreg.QueryValueEx(key, "ProxyServer")
-                            self._orig_proxy_server = str(val)
-                            self._proxy_server_existed = True
-                        except FileNotFoundError:
+                        # CRITICAL SAFETY CHECK:
+                        # If existing ProxyServer points to localhost/127.0.0.1, it was an orphaned
+                        # proxy from a previous session or crash.
+                        # NEVER treat localhost proxy as a user's pre-existing legitimate proxy!
+                        if is_localhost_proxy(self._orig_proxy_server):
+                            self._orig_proxy_enable = 0
                             self._orig_proxy_server = ""
                             self._proxy_server_existed = False
 
@@ -202,6 +227,9 @@ class SystemProxyConfig:
                     if (self._windows_backup_saved and self._orig_proxy_enable is not None)
                     else 0
                 )
+                if is_localhost_proxy(self._orig_proxy_server):
+                    target_enable = 0
+
                 try:
                     winreg.SetValueEx(key, "ProxyEnable", 0, winreg.REG_DWORD, target_enable)
                 except Exception as e:
@@ -209,38 +237,45 @@ class SystemProxyConfig:
                     success = False
 
                 # 2. Restore ProxyServer
-                if self._windows_backup_saved:
-                    if self._proxy_server_existed and self._orig_proxy_server is not None:
-                        try:
-                            winreg.SetValueEx(key, "ProxyServer", 0, winreg.REG_SZ, self._orig_proxy_server)
-                        except Exception as e:
-                            print(f"[SystemProxy] Failed to restore ProxyServer: {e}", file=sys.stderr)
-                            success = False
-                    else:
-                        try:
-                            winreg.DeleteValue(key, "ProxyServer")
-                        except FileNotFoundError:
-                            pass
-                        except Exception as e:
-                            print(f"[SystemProxy] Failed to remove ProxyServer: {e}", file=sys.stderr)
-                            success = False
+                if (
+                    self._windows_backup_saved
+                    and self._proxy_server_existed
+                    and self._orig_proxy_server
+                    and not is_localhost_proxy(self._orig_proxy_server)
+                ):
+                    try:
+                        winreg.SetValueEx(key, "ProxyServer", 0, winreg.REG_SZ, self._orig_proxy_server)
+                    except Exception as e:
+                        print(f"[SystemProxy] Failed to restore ProxyServer: {e}", file=sys.stderr)
+                        success = False
+                else:
+                    try:
+                        winreg.DeleteValue(key, "ProxyServer")
+                    except FileNotFoundError:
+                        pass
+                    except Exception as e:
+                        print(f"[SystemProxy] Failed to remove ProxyServer: {e}", file=sys.stderr)
+                        success = False
 
                 # 3. Restore ProxyOverride
-                if self._windows_backup_saved:
-                    if self._proxy_override_existed and self._orig_proxy_override is not None:
-                        try:
-                            winreg.SetValueEx(key, "ProxyOverride", 0, winreg.REG_SZ, self._orig_proxy_override)
-                        except Exception as e:
-                            print(f"[SystemProxy] Failed to restore ProxyOverride: {e}", file=sys.stderr)
-                            success = False
-                    else:
-                        try:
-                            winreg.DeleteValue(key, "ProxyOverride")
-                        except FileNotFoundError:
-                            pass
-                        except Exception as e:
-                            print(f"[SystemProxy] Failed to remove ProxyOverride: {e}", file=sys.stderr)
-                            success = False
+                if (
+                    self._windows_backup_saved
+                    and self._proxy_override_existed
+                    and self._orig_proxy_override
+                ):
+                    try:
+                        winreg.SetValueEx(key, "ProxyOverride", 0, winreg.REG_SZ, self._orig_proxy_override)
+                    except Exception as e:
+                        print(f"[SystemProxy] Failed to restore ProxyOverride: {e}", file=sys.stderr)
+                        success = False
+                else:
+                    try:
+                        winreg.DeleteValue(key, "ProxyOverride")
+                    except FileNotFoundError:
+                        pass
+                    except Exception as e:
+                        print(f"[SystemProxy] Failed to remove ProxyOverride: {e}", file=sys.stderr)
+                        success = False
 
             self._windows_backup_saved = False
 
@@ -254,6 +289,116 @@ class SystemProxyConfig:
                 success = False
         except Exception as e:
             print(f"[SystemProxy] Windows notification error during disable: {e}", file=sys.stderr)
+            success = False
+
+        return success
+
+    @classmethod
+    def cleanup_orphaned_proxy(cls, force: bool = False) -> bool:
+        """
+        Check for and cleanup any orphaned localhost system proxy settings.
+        If force=True, unsets system proxy unconditionally.
+        If force=False, only resets if proxy points to localhost/127.0.0.1 or is enabled without server.
+        Notifies the OS network stack (WinINet) immediately.
+        """
+        success = True
+        try:
+            if sys.platform.startswith("win"):
+                try:
+                    import winreg
+                except ImportError:
+                    return False
+
+                try:
+                    with winreg.OpenKey(
+                        winreg.HKEY_CURRENT_USER,
+                        WINDOWS_INTERNET_SETTINGS_KEY,
+                        0,
+                        winreg.KEY_READ
+                    ) as key:
+                        try:
+                            val_server, _ = winreg.QueryValueEx(key, "ProxyServer")
+                            proxy_server = str(val_server)
+                        except FileNotFoundError:
+                            proxy_server = ""
+
+                        try:
+                            val_enable, _ = winreg.QueryValueEx(key, "ProxyEnable")
+                            proxy_enable = int(val_enable)
+                        except FileNotFoundError:
+                            proxy_enable = 0
+                except Exception:
+                    proxy_server = ""
+                    proxy_enable = 0
+
+                should_cleanup = force or is_localhost_proxy(proxy_server) or (proxy_enable == 1 and not proxy_server)
+                if should_cleanup:
+                    try:
+                        with winreg.OpenKey(
+                            winreg.HKEY_CURRENT_USER,
+                            WINDOWS_INTERNET_SETTINGS_KEY,
+                            0,
+                            winreg.KEY_SET_VALUE
+                        ) as key:
+                            winreg.SetValueEx(key, "ProxyEnable", 0, winreg.REG_DWORD, 0)
+                            try:
+                                winreg.DeleteValue(key, "ProxyServer")
+                            except FileNotFoundError:
+                                pass
+                            try:
+                                winreg.DeleteValue(key, "ProxyOverride")
+                            except FileNotFoundError:
+                                pass
+                    except Exception as e:
+                        print(f"[SystemProxy] Error clearing orphaned Windows proxy: {e}", file=sys.stderr)
+                        success = False
+
+                    # Notify WinINet
+                    try:
+                        import ctypes
+                        INTERNET_OPTION_SETTINGS_CHANGED = 39
+                        INTERNET_OPTION_REFRESH = 37
+                        wininet = ctypes.windll.wininet
+                        wininet.InternetSetOptionW(0, INTERNET_OPTION_SETTINGS_CHANGED, 0, 0)
+                        wininet.InternetSetOptionW(0, INTERNET_OPTION_REFRESH, 0, 0)
+                    except Exception:
+                        pass
+
+            elif sys.platform.startswith("linux"):
+                if shutil.which("gsettings"):
+                    try:
+                        res = subprocess.run(
+                            ["gsettings", "get", GNOME_HTTP_SCHEMA, "host"],
+                            capture_output=True,
+                            text=True,
+                            timeout=3
+                        )
+                        host = res.stdout.strip().strip("'\"") if res.returncode == 0 else ""
+                        if force or is_localhost_proxy(host):
+                            subprocess.run(
+                                ["gsettings", "set", GNOME_PROXY_SCHEMA, "mode", "none"],
+                                capture_output=True,
+                                timeout=3
+                            )
+                    except Exception:
+                        pass
+
+                default_env_path = os.path.expanduser("~/.config/turbobond/proxy_env")
+                if os.path.exists(default_env_path):
+                    try:
+                        os.remove(default_env_path)
+                    except Exception:
+                        pass
+
+                for env_var in ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"]:
+                    if env_var in os.environ:
+                        try:
+                            del os.environ[env_var]
+                        except Exception:
+                            pass
+
+        except Exception as e:
+            print(f"[SystemProxy] cleanup_orphaned_proxy encountered error: {e}", file=sys.stderr)
             success = False
 
         return success

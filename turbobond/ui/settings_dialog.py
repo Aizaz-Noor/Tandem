@@ -12,6 +12,7 @@ import customtkinter as ctk
 from tkinter import filedialog, messagebox
 from typing import Callable, Optional
 from turbobond.core.config import ConfigManager
+from turbobond.core.system_proxy import SystemProxyConfig
 from turbobond.ui.theme import Colors, Fonts, Icons, style_segmented_button, apply_window_icon
 
 
@@ -272,6 +273,45 @@ class SettingsDialog(ctk.CTkToplevel):
             corner_radius=4
         )
         self.auto_connect_check.grid(row=3, column=0, columnspan=2, sticky="w", pady=(6, 10))
+
+        # Restore Direct Internet Tool Frame
+        proxy_tool_frame = ctk.CTkFrame(
+            form_card,
+            fg_color=Colors.SUB_CARD_BG,
+            corner_radius=6,
+            border_width=1,
+            border_color=Colors.BORDER_MUTED
+        )
+        proxy_tool_frame.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(10, 4))
+
+        def _do_reset_system_proxy():
+            SystemProxyConfig.cleanup_orphaned_proxy(force=True)
+            self.lbl_reset_feedback.configure(
+                text="Direct Internet restored (proxy disabled)",
+                text_color=Colors.ACCENT_EMERALD
+            )
+
+        btn_reset_proxy = ctk.CTkButton(
+            proxy_tool_frame,
+            text="Reset Windows Proxy Now",
+            command=_do_reset_system_proxy,
+            font=Fonts.button(),
+            fg_color=Colors.CARD_BG,
+            hover_color=Colors.CARD_BG_HOVER,
+            text_color=Colors.TEXT_PRIMARY,
+            border_width=1,
+            border_color=Colors.BORDER_MUTED,
+            height=28
+        )
+        btn_reset_proxy.pack(side="left", padx=10, pady=8)
+
+        self.lbl_reset_feedback = ctk.CTkLabel(
+            proxy_tool_frame,
+            text="Restores direct connection if browser gets stuck without Tandem",
+            font=Fonts.caption(),
+            text_color=Colors.TEXT_MUTED
+        )
+        self.lbl_reset_feedback.pack(side="left", padx=(4, 10), pady=8)
 
     def _build_cloud_bonding_tab(self, tab):
         form_card = ctk.CTkFrame(tab, fg_color="transparent")

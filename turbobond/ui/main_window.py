@@ -63,6 +63,8 @@ class MainWindow(ctk.CTk):
         self.dispatcher: Optional[LocalDispatcher] = None
         self.route_manager = RouteManager()
         self.system_proxy = SystemProxyConfig()
+        # Clean any orphaned proxy from prior crashes before starting
+        SystemProxyConfig.cleanup_orphaned_proxy()
         self._dispatcher_active = False
 
         # State Variables
@@ -1485,11 +1487,12 @@ class MainWindow(ctk.CTk):
                 pass
             self.dispatcher = None
 
-        if self.config.get("auto_system_proxy", True):
+        if hasattr(self, 'system_proxy') and self.system_proxy:
             try:
                 self.system_proxy.disable_proxy()
             except Exception:
                 pass
+        SystemProxyConfig.cleanup_orphaned_proxy()
 
         if is_elevated():
             try:
@@ -1514,13 +1517,20 @@ class MainWindow(ctk.CTk):
         os._exit(0)
 
     def destroy(self):
-        self._closing = True
-        self.is_monitoring = False
-        if self.dispatcher:
-            try:
-                self.dispatcher.stop_from_thread()
-            except Exception:
-                pass
-            self.dispatcher = None
+        if not self._closing:
+            self._closing = True
+            self.is_monitoring = False
+            if self.dispatcher:
+                try:
+                    self.dispatcher.stop_from_thread()
+                except Exception:
+                    pass
+                self.dispatcher = None
+            if hasattr(self, 'system_proxy') and self.system_proxy:
+                try:
+                    self.system_proxy.disable_proxy()
+                except Exception:
+                    pass
+            SystemProxyConfig.cleanup_orphaned_proxy()
         super().destroy()
 
