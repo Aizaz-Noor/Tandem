@@ -34,12 +34,13 @@ const TYPE_BG = {
 interface AdapterCardProps {
   adapter: Adapter;
   selected: boolean;
+  disabled?: boolean;
   rxMbps?: number;
   txMbps?: number;
   onToggle: (name: string) => void;
 }
 
-export function AdapterCard({ adapter, selected, rxMbps = 0, txMbps = 0, onToggle }: AdapterCardProps) {
+export function AdapterCard({ adapter, selected, disabled = false, rxMbps = 0, txMbps = 0, onToggle }: AdapterCardProps) {
   const Icon = ICON_MAP[adapter.type as keyof typeof ICON_MAP] ?? Globe;
   const typeColor = TYPE_COLOR[adapter.type as keyof typeof TYPE_COLOR] ?? TYPE_COLOR.other;
   const typeBg    = TYPE_BG[adapter.type as keyof typeof TYPE_BG] ?? TYPE_BG.other;
@@ -51,7 +52,12 @@ export function AdapterCard({ adapter, selected, rxMbps = 0, txMbps = 0, onToggl
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -8 }}
-      onClick={() => onToggle(adapter.name)}
+      role="checkbox"
+      aria-checked={selected}
+      aria-disabled={disabled}
+      tabIndex={disabled ? -1 : 0}
+      onKeyDown={e => { if (!disabled && (e.key === " " || e.key === "Enter")) { e.preventDefault(); onToggle(adapter.name); } }}
+      onClick={() => { if (!disabled) onToggle(adapter.name); }}
       className={cn(
         "card glass-hover cursor-pointer select-none transition-all duration-200",
         selected

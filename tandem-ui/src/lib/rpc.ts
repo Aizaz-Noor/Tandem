@@ -1,3 +1,4 @@
+import { invoke, isTauri } from "@tauri-apps/api/core";
 /**
  * Tandem WebSocket RPC Client
  * Connects to the Python sidecar on ws://127.0.0.1:7878
@@ -51,132 +52,144 @@ export interface StateSnapshot {
   config: AppConfig;
   adapters: Adapter[];
   bonding_active: boolean;
+  engine_state: string;
+  logs: LogEntry[];
 }
 
+export interface LogEntry { ts: string; level: "info" | "warn" | "error" | "debug"; msg: string }
+export interface Connection { url: string; token: string }
 type EventHandler = (data: unknown) => void;
+const desktopConnection = async (): Promise<Connection> => {
+  if (!isTauri()) throw new Error("Open Tandem desktop to connect to the network backend.");
+  return invoke<Connection>("sidecar_connection");
+};
 
 export class TandemRPC {
   private ws: WebSocket | null = null;
-  private pending = new Map<string | number, {
-    resolve: (v: unknown) => void;
-    reject: (e: Error) => void;
-  }>();
-  private idCounter = 0;
+  private pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   private listeners = new Map<string, Set<EventHandler>>();
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  private url: string;
-
+  private handshakeTimer: ReturnType<typeof setTimeout> | null = null;
+  private generation = 0;
+  private connecting = false;
+  private stopped = false;
+  private idCounter = 0;
   public connected = false;
   public onConnectionChange?: (connected: boolean) => void;
 
-  constructor(url = "ws://127.0.0.1:7878") {
-    this.url = url;
+  constructor(private connectionProvider = desktopConnection, private timeoutMs = 30000) {}
+
+  private emit(event: string, data: unknown) {
+    this.listeners.get(event)?.forEach(h => h(data));
   }
 
-  connect() {
-    if (this.ws && this.ws.readyState <= WebSocket.OPEN) return;
-
+  async connect() {
+    if (this.connecting || (this.ws && this.ws.readyState <= WebSocket.OPEN)) return;
+    this.stopped = false;
+    this.connecting = true;
+    const generation = ++this.generation;
     try {
-      this.ws = new WebSocket(this.url);
-    } catch {
-      this._scheduleReconnect();
-      return;
+      const info = await this.connectionProvider();
+      if (generation !== this.generation) return;
+      const ws = new WebSocket(info.url);
+      this.ws = ws;
+      this.handshakeTimer = setTimeout(() => ws.close(), this.timeoutMs);
+      ws.onopen = () => ws.send(JSON.stringify({ token: info.token }));
+      ws.onmessage = ev => {
+        if (generation !== this.generation) return;
+        let msg: Record<string, unknown>;
+        try {
+          msg = JSON.parse(ev.data as string);
+          if (!msg || typeof msg !== "object" || Array.isArray(msg)) return;
+        } catch { return; }
+        if (msg.event === "state_snapshot") {
+          if (this.handshakeTimer) clearTimeout(this.handshakeTimer);
+          this.handshakeTimer = null;
+          this.connected = true;
+          this.onConnectionChange?.(true);
+        }
+        if (typeof msg.event === "string") { this.emit(msg.event, msg.data); return; }
+        const id = msg.id as number;
+        const pending = this.pending.get(id);
+        if (!pending) return;
+        clearTimeout(pending.timer);
+        this.pending.delete(id);
+        if ("error" in msg) pending.reject(new Error(String(msg.error)));
+        else pending.resolve(msg.result);
+      };
+      ws.onerror = () => this.emit("connection_error", "Network backend connection failed.");
+      ws.onclose = () => {
+        if (generation !== this.generation) return;
+        this.ws = null;
+        this.clearPending("Backend disconnected");
+        this.scheduleReconnect();
+      };
+    } catch (err) {
+      if (generation !== this.generation) return;
+      this.emit("connection_error", (err as Error).message);
+      this.scheduleReconnect();
+    } finally {
+      if (generation === this.generation) this.connecting = false;
     }
-
-    this.ws.onopen = () => {
-      this.connected = true;
-      this.onConnectionChange?.(true);
-      if (this.reconnectTimer) {
-        clearTimeout(this.reconnectTimer);
-        this.reconnectTimer = null;
-      }
-    };
-
-    this.ws.onmessage = (ev) => {
-      let msg: Record<string, unknown>;
-      try { msg = JSON.parse(ev.data as string); } catch { return; }
-
-      // Server-initiated event
-      if ("event" in msg) {
-        const handlers = this.listeners.get(msg.event as string);
-        handlers?.forEach((h) => h(msg.data));
-        return;
-      }
-
-      // RPC response
-      const id = msg.id as string | number;
-      const pending = this.pending.get(id);
-      if (!pending) return;
-      this.pending.delete(id);
-
-      if ("error" in msg) {
-        pending.reject(new Error(msg.error as string));
-      } else {
-        pending.resolve(msg.result);
-      }
-    };
-
-    this.ws.onerror = () => {
-      /* errors are followed by onclose */
-    };
-
-    this.ws.onclose = () => {
-      this.connected = false;
-      this.onConnectionChange?.(false);
-      // Reject all pending calls
-      this.pending.forEach((p) => p.reject(new Error("WebSocket closed")));
-      this.pending.clear();
-      this._scheduleReconnect();
-    };
   }
 
-  private _scheduleReconnect() {
-    if (this.reconnectTimer) return;
-    this.reconnectTimer = setTimeout(() => {
-      this.reconnectTimer = null;
-      this.connect();
-    }, 2000);
+  private clearPending(message: string) {
+    if (this.handshakeTimer) clearTimeout(this.handshakeTimer);
+    this.handshakeTimer = null;
+    this.connected = false;
+    this.onConnectionChange?.(false);
+    this.pending.forEach(p => { clearTimeout(p.timer); p.reject(new Error(message)); });
+    this.pending.clear();
   }
 
-  /** Subscribe to a server-pushed event. */
+  disconnect() {
+    this.stopped = true;
+    ++this.generation;
+    this.connecting = false;
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+    const ws = this.ws;
+    this.ws = null;
+    if (ws) { ws.onclose = null; ws.onopen = null; ws.onmessage = null; ws.close(); }
+    this.clearPending("Backend disconnected");
+  }
+
+  private scheduleReconnect() {
+    if (this.stopped || this.reconnectTimer) return;
+    this.reconnectTimer = setTimeout(() => { this.reconnectTimer = null; void this.connect(); }, 2000);
+  }
+
   on(event: string, handler: EventHandler): () => void {
     if (!this.listeners.has(event)) this.listeners.set(event, new Set());
     this.listeners.get(event)!.add(handler);
-    return () => this.listeners.get(event)?.delete(handler);
+    return () => { this.listeners.get(event)?.delete(handler); };
   }
 
-  /** Send an RPC call and await its typed result. */
   private call<T>(method: string, params?: Record<string, unknown>): Promise<T> {
-    return new Promise<T>((resolve, reject) => {
-      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-        reject(new Error("Not connected to Tandem sidecar"));
-        return;
+    return new Promise((resolve, reject) => {
+      if (!this.connected || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
+        reject(new Error("Not connected to the network backend")); return;
       }
       const id = ++this.idCounter;
-      this.pending.set(id, {
-        resolve: (v) => resolve(v as T),
-        reject,
-      });
-      this.ws.send(JSON.stringify({ id, method, params: params ?? null }));
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error("Backend request timed out. Reconnecting to refresh its status."));
+        this.ws?.close();
+      }, this.timeoutMs);
+      this.pending.set(id, { resolve: value => resolve(value as T), reject, timer });
+      try { this.ws.send(JSON.stringify({ id, method, params: params ?? null })); }
+      catch (err) { clearTimeout(timer); this.pending.delete(id); reject(err); }
     });
   }
 
-  // ── Typed API wrappers ───────────────────────────────────────────
-
-  getAdapters()                        { return this.call<Adapter[]>("get_adapters"); }
-  getConfig()                          { return this.call<AppConfig>("get_config"); }
-  saveConfig(data: Partial<AppConfig>) { return this.call<boolean>("save_config", data as Record<string, unknown>); }
+  getAdapters() { return this.call<Adapter[]>("get_adapters"); }
+  getConfig() { return this.call<AppConfig>("get_config"); }
+  saveConfig(patch: Partial<AppConfig>) { return this.call<AppConfig>("save_config", patch); }
   startBonding(params?: { mode?: string; selected_adapters?: string[] }) {
-    return this.call<{ ok: boolean; message?: string; mode?: string }>("start_bonding", params as Record<string, unknown>);
+    return this.call<{ ok: boolean; message?: string; mode?: string }>("start_bonding", params);
   }
-  stopBonding()  { return this.call<{ ok: boolean }>("stop_bonding"); }
-  getStatus()    { return this.call<{ bonding_active: boolean; engine_state: string }>("get_status"); }
-  resetProxy()   { return this.call<boolean>("reset_proxy"); }
-  startCloud(params: { server_host: string; server_port: number; auth_key: string }) {
-    return this.call<{ ok: boolean }>("start_cloud", params as Record<string, unknown>);
-  }
-  stopCloud()    { return this.call<{ ok: boolean }>("stop_cloud"); }
+  stopBonding() { return this.call<{ ok: boolean }>("stop_bonding"); }
+  resetProxy() { return this.call<boolean>("reset_proxy"); }
+  getStatus() { return this.call<{ bonding_active: boolean; engine_state: string }>("get_status"); }
 }
-
-// Singleton shared across the app
 export const rpc = new TandemRPC();

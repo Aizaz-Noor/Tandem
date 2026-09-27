@@ -1,12 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { Trash2, Circle } from "lucide-react";
-import { rpc } from "../lib/rpc";
 
-interface LogEntry {
-  ts: string;
-  level: "info" | "warn" | "error" | "debug";
-  msg: string;
-}
+import type { LogEntry } from "../lib/rpc";
 
 const LEVEL_COLOR = {
   info:  "text-slate-400",
@@ -15,40 +10,8 @@ const LEVEL_COLOR = {
   error: "text-red-400",
 } as const;
 
-export function LogsPage() {
-  const [entries, setEntries] = useState<LogEntry[]>([
-    { ts: new Date().toISOString(), level: "info", msg: "Tandem UI started. Connecting to sidecar…" },
-  ]);
+export function LogsPage({ entries, onClear }: { entries: LogEntry[]; onClear: () => void }) {
   const bottomRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const addLog = (level: LogEntry["level"]) => (data: unknown) => {
-      const msg = typeof data === "string" ? data : JSON.stringify(data);
-      setEntries((prev) => [
-        ...prev.slice(-499),
-        { ts: new Date().toISOString(), level, msg },
-      ]);
-    };
-
-    const unsubs = [
-      rpc.on("log_info",  addLog("info")),
-      rpc.on("log_warn",  addLog("warn")),
-      rpc.on("log_error", addLog("error")),
-      rpc.on("bonding_state", (data) => {
-        const d = data as { active: boolean; mode?: string };
-        const msg = d.active
-          ? `Bonding started — mode: ${d.mode ?? "unknown"}`
-          : "Bonding stopped";
-        addLog("info")(msg);
-      }),
-      rpc.on("engine_state", (data) => {
-        const d = data as { state: string };
-        addLog("info")(`Engine state → ${d.state}`);
-      }),
-    ];
-
-    return () => unsubs.forEach((fn) => fn());
-  }, []);
 
   // Auto-scroll
   useEffect(() => {
@@ -63,7 +26,7 @@ export function LogsPage() {
           <p className="text-xs text-slate-500 mt-0.5">{entries.length} entries</p>
         </div>
         <button
-          onClick={() => setEntries([])}
+          onClick={onClear}
           className="btn-ghost text-xs"
           title="Clear logs"
         >

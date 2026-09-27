@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { RefreshCw, Link2Off } from "lucide-react";
 import { AdapterCard } from "../components/ui/AdapterCard";
@@ -12,24 +11,24 @@ interface DashboardPageProps {
   onStart: (selected?: string[]) => void;
   onStop: () => void;
   onRefresh: () => void;
+  onSelect: (patch: { selected_adapters: string[] }) => Promise<boolean>;
 }
 
-export function DashboardPage({ state, onStart, onStop, onRefresh }: DashboardPageProps) {
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-
+export function DashboardPage({ state, onStart, onStop, onRefresh, onSelect }: DashboardPageProps) {
+  const selected = new Set(state.config?.selected_adapters ?? []);
+  const running = state.bondingActive || ["CONNECTING", "CONNECTED", "RECONNECTING"].includes(state.engineState);
   const toggleAdapter = (name: string) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      next.has(name) ? next.delete(name) : next.add(name);
-      return next;
-    });
+    if (running || state.loading || !state.connected) return;
+    const next = new Set(selected);
+    next.has(name) ? next.delete(name) : next.add(name);
+    void onSelect({ selected_adapters: [...next] });
   };
 
   const handleConnect = () => {
-    if (state.bondingActive) {
+    if (running) {
       onStop();
     } else {
-      onStart(selected.size > 0 ? [...selected] : undefined);
+      onStart([...selected]);
     }
   };
 
@@ -38,20 +37,6 @@ export function DashboardPage({ state, onStart, onStop, onRefresh }: DashboardPa
 
   return (
     <div className="flex flex-col gap-5 h-full overflow-y-auto pr-1">
-      {/* Error banner */}
-      <AnimatePresence>
-        {state.error && (
-          <motion.div
-            initial={{ opacity: 0, y: -8 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -8 }}
-            className="card border-red-500/40 bg-red-500/10 text-red-300 text-sm"
-          >
-            {state.error}
-          </motion.div>
-        )}
-      </AnimatePresence>
-
       {/* Speed meters */}
       <SpeedMeter rxMbps={totalRx} txMbps={totalTx} active={state.bondingActive} />
 
@@ -95,7 +80,8 @@ export function DashboardPage({ state, onStart, onStop, onRefresh }: DashboardPa
                 <AdapterCard
                   key={adapter.name}
                   adapter={adapter}
-                  selected={selected.has(adapter.name)}
+                  selected={selected.size === 0 || selected.has(adapter.name)}
+                  disabled={running || state.loading || !state.connected}
                   rxMbps={adapterTelemetry?.rx_mbps ?? 0}
                   txMbps={adapterTelemetry?.tx_mbps ?? 0}
                   onToggle={toggleAdapter}
@@ -106,6 +92,8 @@ export function DashboardPage({ state, onStart, onStop, onRefresh }: DashboardPa
         </AnimatePresence>
       </div>
 
+      <p className="text-xs text-slate-500">No specific selection uses all available adapters. Disconnect to change selection.</p>
+      {state.engineState !== "DISCONNECTED" && <p className="text-xs text-slate-400">Cloud: {state.engineState.toLowerCase()}</p>}
       {/* Mode badge */}
       {state.config && (
         <div className="flex items-center gap-2">
@@ -129,7 +117,7 @@ export function DashboardPage({ state, onStart, onStop, onRefresh }: DashboardPa
       {/* Connect button — pinned to bottom */}
       <div className="mt-auto pt-2">
         <ConnectButton
-          active={state.bondingActive}
+          active={running}
           loading={state.loading}
           disabled={!state.connected}
           onClick={handleConnect}

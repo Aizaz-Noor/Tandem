@@ -16,7 +16,7 @@ const PAGE_VARIANTS = {
 
 export default function App() {
   const [page, setPage] = useState<Page>("dashboard");
-  const { state, startBonding, stopBonding, refreshAdapters, saveConfig, resetProxy } = useTandem();
+  const { state, startBonding, stopBonding, refreshAdapters, saveConfig, resetProxy, clearLogs } = useTandem();
 
   return (
     <div className="flex h-screen w-screen bg-mesh overflow-hidden">
@@ -40,6 +40,7 @@ export default function App() {
           </span>
         </div>
 
+        {state.error && <div role="alert" className="mx-6 mt-3 text-sm text-red-300">{state.error}</div>}
         {/* Animated page body */}
         <div className="flex-1 overflow-hidden relative p-6">
           <AnimatePresence mode="wait">
@@ -58,6 +59,7 @@ export default function App() {
                   onStart={startBonding}
                   onStop={stopBonding}
                   onRefresh={refreshAdapters}
+                  onSelect={saveConfig}
                 />
               )}
               {page === "settings" && (
@@ -67,7 +69,7 @@ export default function App() {
                   onResetProxy={resetProxy}
                 />
               )}
-              {page === "logs" && <LogsPage />}
+              {page === "logs" && <LogsPage entries={state.logs} onClear={clearLogs} />}
             </motion.div>
           </AnimatePresence>
         </div>
