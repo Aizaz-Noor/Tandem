@@ -1,32 +1,39 @@
-# Python
+# ─── Python ───────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *$py.class
 *.egg-info/
 *.egg
 
-# Testing & Coverage
+# ─── Testing & Coverage ───────────────────────────────────────────────────────
 .pytest_cache/
 .coverage
 htmlcov/
 
-# Build & Distribution
+# ─── Python Build & Distribution ──────────────────────────────────────────────
 dist/
 build/
 *.spec
 
-# IDE & Editors
+# ─── Tauri / Node (tandem-ui) ─────────────────────────────────────────────────
+tandem-ui/node_modules/
+tandem-ui/dist/
+tandem-ui/.tauri/
+tandem-ui/src-tauri/target/
+tandem-ui/src-tauri/gen/
+
+# ─── IDE & Editors ────────────────────────────────────────────────────────────
 .vscode/
 .idea/
 *.swp
 *.swo
 
-# OS Artifacts
+# ─── OS Artifacts ─────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
 desktop.ini
 
-# Local Configuration & Logs
+# ─── Local Configuration & Logs ───────────────────────────────────────────────
 config.json
 *.log
 *.tmp

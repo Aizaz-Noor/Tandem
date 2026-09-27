@@ -1,0 +1,154 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ─── Global reset ──────────────────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body, #root {
+  height: 100%;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+body {
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #0a0a0f;
+  color: #e2e8f0;
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* ─── Scrollbars ─────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.12);
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.24); }
+
+/* ─── Glass utility classes ──────────────────────────────────────── */
+@layer components {
+  .glass {
+    background: rgba(255,255,255,0.06);
+    backdrop-filter: blur(16px) saturate(180%);
+    -webkit-backdrop-filter: blur(16px) saturate(180%);
+    border: 1px solid rgba(255,255,255,0.10);
+  }
+
+  .glass-strong {
+    background: rgba(255,255,255,0.10);
+    backdrop-filter: blur(32px) saturate(200%);
+    -webkit-backdrop-filter: blur(32px) saturate(200%);
+    border: 1px solid rgba(255,255,255,0.16);
+  }
+
+  .glass-hover {
+    @apply transition-all duration-200;
+  }
+  .glass-hover:hover {
+    background: rgba(255,255,255,0.10);
+    border-color: rgba(255,255,255,0.18);
+  }
+
+  /* Status dots */
+  .dot-connected    { @apply w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_6px_theme(colors.emerald.400)]; }
+  .dot-connecting   { @apply w-2 h-2 rounded-full bg-amber-400  shadow-[0_0_6px_theme(colors.amber.400)] animate-pulse; }
+  .dot-disconnected { @apply w-2 h-2 rounded-full bg-slate-500; }
+
+  /* Active nav item */
+  .nav-item {
+    @apply flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium
+           text-slate-400 glass-hover cursor-pointer transition-all duration-200;
+  }
+  .nav-item.active {
+    @apply text-white;
+    background: rgba(99,102,241,0.20);
+    border-color: rgba(99,102,241,0.35);
+  }
+  .nav-item.active svg { @apply text-brand-400; }
+
+  /* Cards */
+  .card {
+    @apply glass rounded-2xl p-4;
+  }
+
+  /* Buttons */
+  .btn-primary {
+    @apply flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl
+           bg-brand-600 hover:bg-brand-500 text-white text-sm font-semibold
+           transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+  .btn-danger {
+    @apply flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl
+           bg-red-600/80 hover:bg-red-500 text-white text-sm font-semibold
+           transition-all duration-200;
+  }
+  .btn-ghost {
+    @apply flex items-center justify-center gap-2 px-4 py-2 rounded-lg
+           text-slate-400 hover:text-white hover:bg-white/10 text-sm
+           transition-all duration-200;
+  }
+
+  /* Speed readout */
+  .speed-value {
+    @apply font-mono text-3xl font-bold leading-none tabular-nums;
+  }
+  .speed-unit {
+    @apply font-mono text-xs text-slate-400 mt-1;
+  }
+}
+
+/* ─── Mesh background ────────────────────────────────────────────── */
+.bg-mesh {
+  background-color: #0a0a0f;
+  background-image:
+    radial-gradient(at 27% 37%, hsla(215,98%,61%,0.15) 0px, transparent 50%),
+    radial-gradient(at 97% 21%, hsla(125,98%,72%,0.06) 0px, transparent 50%),
+    radial-gradient(at 52% 99%, hsla(354,98%,61%,0.06) 0px, transparent 50%),
+    radial-gradient(at 10% 29%, hsla(256,96%,67%,0.10) 0px, transparent 50%);
+}
+
+/* ─── Drag region for custom titlebar ───────────────────────────── */
+[data-tauri-drag-region] {
+  cursor: move;
+  -webkit-app-region: drag;
+}
+button[data-tauri-drag-region="false"],
+a[data-tauri-drag-region="false"] {
+  -webkit-app-region: no-drag;
+}
+
+/* ─── Range input styling ────────────────────────────────────────── */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  background: rgba(255,255,255,0.12);
+  border-radius: 2px;
+  outline: none;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #6366f1;
+  cursor: pointer;
+  box-shadow: 0 0 0 3px rgba(99,102,241,0.25);
+}
+
+/* ─── Toggle switch ──────────────────────────────────────────────── */
+.toggle-bg {
+  @apply w-10 h-5 rounded-full transition-colors duration-200 cursor-pointer;
+}
+.toggle-dot {
+  @apply absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform duration-200;
+}

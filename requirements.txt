@@ -1,5 +1,13 @@
+# Core sidecar (required for Tauri mode)
+websockets>=12.0
+
+# Legacy UI (optional — only needed for --legacy-ui flag)
 customtkinter>=5.2.0
 pystray>=0.19.5
 pillow>=10.0.0
+
+# Development & testing
 pytest>=8.0.0
+
+# Build (PyInstaller for sidecar EXE bundling)
 pyinstaller>=6.0.0

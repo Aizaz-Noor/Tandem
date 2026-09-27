@@ -10,7 +10,7 @@ Tandem combines multiple active network connections on a single computer into a 
 - Cloud Bonding engine: Multipath QUIC and MASQUE (RFC 9484) encapsulation over a Wintun virtual network adapter for single-IP traffic reassembly via an external gateway.
 - Dynamic interface hot-toggling: Enable or disable individual network links in real time without restarting active downloads.
 - Real-time telemetry: Live bandwidth tracking for aggregate and per-adapter download and upload rates.
-- Desktop user interface: Apple-inspired light theme built with CustomTkinter, featuring WCAG AAA contrast and high-resolution vector icons.
+- Desktop user interface: Modern desktop application built with Tauri 2.0, React 18, Tailwind CSS, Framer Motion, and Lucide icons using the native Windows WebView2 runtime, with sub-10 MB binary size and CustomTkinter fallback mode.
 - One-click profile sharing: Export and import network profiles using encrypted `.turbobond` profile files.
 
 ## Bonding Modes
@@ -37,13 +37,14 @@ Cloud Bonding mode bonds all network interfaces at the packet level through a re
 
 | Component | Technology | Description |
 |---|---|---|
-| Language | Python 3.10+ | Core application logic and asynchronous networking |
-| GUI Framework | CustomTkinter | Desktop user interface with Apple Light design system |
-| Icon Engine | Pillow (PIL) | Anti-aliased vector icon rendering and dynamic tinting |
+| Frontend Shell | Tauri 2.0 (Rust) | Native Windows desktop host via WebView2, system tray, sub-10 MB executable |
+| Frontend UI | React 18, Tailwind CSS, TypeScript | Glassmorphism dashboard, Framer Motion animations, Lucide icons |
+| Networking Core | Python 3.10+ / Sidecar | Local proxy dispatcher, interface detection, telemetry, Win32 registry |
+| Sidecar Bridge | WebSocket / JSON-RPC 2.0 | Asynchronous loopback IPC connecting Tauri frontend to Python core |
+| Legacy UI | CustomTkinter | Optional fallback desktop interface (`--legacy-ui`) |
 | Local Proxy | Python `socket`, `threading` | SOCKS5 and HTTP proxy server with interface binding |
 | Cloud Tunnel | Xray / Wintun / MASQUE | Multipath QUIC packet encapsulation (RFC 9484) |
 | System Integration | Win32 Registry / ctypes | Windows system proxy configuration and route management |
-| System Tray | pystray | Background notification area integration |
 | Test Framework | pytest | Automated unit and integration test suite |
 
 ## Architecture
