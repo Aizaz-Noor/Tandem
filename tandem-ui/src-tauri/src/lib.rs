@@ -29,19 +29,17 @@ fn start_sidecar(
         return Ok(()); // already running
     }
 
-    // Resolve the Python interpreter path — bundled or system
+    // Resolve the Python interpreter path and main.py location
     let python = find_python(&app);
-    let main_script = app
-        .path()
-        .resource_dir()
-        .map_err(|e| e.to_string())?
-        .join("main.py");
+    let main_script = find_main_script(&app);
+    let script_dir = main_script.parent().unwrap_or(std::path::Path::new("."));
 
     #[cfg(target_os = "windows")]
     let child = {
         const CREATE_NO_WINDOW: u32 = 0x08000000;
         std::process::Command::new(&python)
             .args([main_script.to_str().unwrap_or("main.py"), "--sidecar"])
+            .current_dir(script_dir)
             .creation_flags(CREATE_NO_WINDOW)
             .spawn()
             .map_err(|e| format!("Failed to start Python sidecar: {e}"))?
@@ -84,6 +82,40 @@ fn sidecar_alive(state: State<'_, SidecarState>) -> bool {
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+fn find_main_script(app: &AppHandle) -> std::path::PathBuf {
+    let resource_dir = app
+        .path()
+        .resource_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+
+    let candidates = [
+        resource_dir.join("main.py"),
+        exe_dir.join("main.py"),
+        exe_dir.join("../../../main.py"),
+        exe_dir.join("../../../../main.py"),
+        std::path::PathBuf::from("main.py"),
+        std::path::PathBuf::from("../../main.py"),
+        std::path::PathBuf::from("../../../main.py"),
+        std::path::PathBuf::from(r"E:\Projects\TurboBond\main.py"),
+    ];
+
+    for path in &candidates {
+        if path.exists() {
+            if let Ok(canon) = path.canonicalize() {
+                return canon;
+            }
+            return path.clone();
+        }
+    }
+
+    std::path::PathBuf::from("main.py")
+}
 
 fn find_python(app: &AppHandle) -> std::path::PathBuf {
     // Prefer a bundled sidecar exe named `tandem-sidecar` or `python`
