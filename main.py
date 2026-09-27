@@ -23,7 +23,7 @@ from turbobond.core.system_proxy import SystemProxyConfig
 
 
 def _emergency_cleanup(signum=None, frame=None):
-    """Guaranteed fallback to restore direct internet on process exit or signal."""
+    """Recover settings left by dead Tandem sessions without touching other proxies."""
     try:
         SystemProxyConfig.cleanup_orphaned_proxy()
     except Exception:
@@ -60,9 +60,23 @@ def run_sidecar():
 
     SystemProxyConfig.cleanup_orphaned_proxy()
 
-    server = TandemRPCServer()
+    import json
+    import threading
+    server = TandemRPCServer(port=int(os.environ.get("TANDEM_RPC_PORT", "7878")))
+    managed = os.environ.get("TANDEM_MANAGED") == "1"
+    def ready(info):
+        # Only the parent reads this pipe. Never persist the per-launch secret.
+        print(json.dumps(info), flush=True)
+        if managed:
+            def watch_parent():
+                # A shutdown line OR parent pipe EOF both trigger graceful cleanup.
+                sys.stdin.readline()
+                server.request_shutdown()
+            threading.Thread(target=watch_parent, daemon=True).start()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(sig, lambda *_: server.request_shutdown())
     try:
-        asyncio.run(server.run())
+        asyncio.run(server.run(ready=ready))
     finally:
         _emergency_cleanup()
 

@@ -122,7 +122,7 @@ class BandwidthMonitor:
     """Tracks byte deltas over time to calculate real-time speeds in Mbps."""
 
     def __init__(self):
-        self.last_time = time.time()
+        self.last_time = time.monotonic()
         self.last_counters = get_raw_counters()
 
     def sample(self, active_interfaces: Optional[list] = None) -> Dict[str, any]:
@@ -130,7 +130,7 @@ class BandwidthMonitor:
         Calculates instantaneous speeds since last sample.
         Returns detailed stats per adapter and total aggregate speed.
         """
-        now = time.time()
+        now = time.monotonic()
         elapsed = now - self.last_time
         if elapsed <= 0:
             elapsed = 0.001
@@ -140,7 +140,7 @@ class BandwidthMonitor:
         total_rx_mbps = 0.0
         total_tx_mbps = 0.0
 
-        target_ifaces = active_interfaces if active_interfaces else list(current_counters.keys())
+        target_ifaces = active_interfaces if active_interfaces is not None else list(current_counters.keys())
 
         for iface in target_ifaces:
             curr_rx, curr_tx = current_counters.get(iface, (0, 0))
@@ -156,8 +156,8 @@ class BandwidthMonitor:
 
             rx_mbps = (rx_rate_bytes_sec * 8) / 1_000_000.0
             tx_mbps = (tx_rate_bytes_sec * 8) / 1_000_000.0
-            rx_mb_s = rx_rate_bytes_sec / (1024.0 * 1024.0)
-            tx_mb_s = tx_rate_bytes_sec / (1024.0 * 1024.0)
+            rx_mb_s = rx_rate_bytes_sec / 1_000_000.0
+            tx_mb_s = tx_rate_bytes_sec / 1_000_000.0
 
             adapter_stats[iface] = {
                 "rx_mbps": round(rx_mbps, 2),

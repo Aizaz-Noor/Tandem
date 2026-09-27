@@ -1,189 +1,125 @@
-// Tandem — Tauri 2.0 Rust backend
-// Launches the Python sidecar and exposes Tauri commands.
-// The React frontend communicates with the sidecar directly via WebSocket (ws://127.0.0.1:7878).
-// The Rust layer handles: window management, sidecar lifecycle, and system tray.
-
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-
-use std::sync::Mutex;
+use std::{io::{BufRead, BufReader, Write}, process::{Child, Command, Stdio}, sync::{mpsc, Mutex}, time::{Duration, Instant}};
 use tauri::{AppHandle, Manager, State};
 use tauri::tray::{TrayIconBuilder, TrayIconEvent};
-
+use serde::{Deserialize, Serialize};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 
-// ─── Sidecar state ────────────────────────────────────────────────────────────
+#[derive(Clone, Deserialize, Serialize)]
+struct Connection { url: String, token: String }
+struct Sidecar { child: Child, connection: Connection }
+#[derive(Default)]
+struct SidecarState(Mutex<Option<Sidecar>>);
 
-struct SidecarState(Mutex<Option<std::process::Child>>);
-
-// ─── Tauri commands ───────────────────────────────────────────────────────────
-
-/// Start the Python sidecar process (main.py --sidecar).
-#[tauri::command]
-fn start_sidecar(
-    app: AppHandle,
-    state: State<'_, SidecarState>,
-) -> Result<(), String> {
-    let mut guard = state.0.lock().map_err(|e| e.to_string())?;
-    if guard.is_some() {
-        return Ok(()); // already running
+fn sidecar_command(app: &AppHandle) -> Result<Command, String> {
+    if cfg!(debug_assertions) {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let python = std::env::var_os("TANDEM_PYTHON").unwrap_or_else(|| "python".into());
+        let mut cmd = Command::new(python);
+        cmd.arg(root.join("main.py")).arg("--sidecar").current_dir(root);
+        Ok(cmd)
+    } else {
+        let name = if cfg!(windows) { "tandem-sidecar.exe" } else { "tandem-sidecar" };
+        let path = app.path().resource_dir().map_err(|e| e.to_string())?.join("sidecar").join(name);
+        if !path.is_file() { return Err("Packaged backend is missing. Reinstall Tandem.".into()); }
+        let mut cmd = Command::new(path);
+        cmd.arg("--sidecar");
+        Ok(cmd)
     }
-
-    // Resolve the Python interpreter path and main.py location
-    let python = find_python(&app);
-    let main_script = find_main_script(&app);
-    let script_dir = main_script.parent().unwrap_or(std::path::Path::new("."));
-
-    #[cfg(target_os = "windows")]
-    let child = {
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        std::process::Command::new(&python)
-            .args([main_script.to_str().unwrap_or("main.py"), "--sidecar"])
-            .current_dir(script_dir)
-            .creation_flags(CREATE_NO_WINDOW)
-            .spawn()
-            .map_err(|e| format!("Failed to start Python sidecar: {e}"))?
-    };
-
-    #[cfg(not(target_os = "windows"))]
-    let child = std::process::Command::new(&python)
-        .args([main_script.to_str().unwrap_or("main.py"), "--sidecar"])
-        .spawn()
-        .map_err(|e| format!("Failed to start Python sidecar: {e}"))?;
-
-    *guard = Some(child);
-    Ok(())
 }
 
-/// Kill the Python sidecar.
-#[tauri::command]
-fn stop_sidecar(state: State<'_, SidecarState>) -> Result<(), String> {
-    let mut guard = state.0.lock().map_err(|e| e.to_string())?;
-    if let Some(mut child) = guard.take() {
-        child.kill().ok();
-    }
-    Ok(())
-}
-
-/// Check whether the sidecar is alive.
-#[tauri::command]
-fn sidecar_alive(state: State<'_, SidecarState>) -> bool {
-    let mut guard = match state.0.lock() {
-        Ok(g) => g,
-        Err(_) => return false,
-    };
-    if let Some(ref mut child) = *guard {
+fn stop_child(child: &mut Child) {
+    if let Some(mut input) = child.stdin.take() { let _ = input.write_all(b"shutdown\n"); }
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
         match child.try_wait() {
-            Ok(None) => return true,   // still running
-            _ => { *guard = None; }     // exited or error
+            Ok(Some(_)) => return,
+            Err(_) => break,
+            _ if Instant::now() >= deadline => break,
+            _ => std::thread::sleep(Duration::from_millis(50)),
         }
     }
-    false
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-fn find_main_script(app: &AppHandle) -> std::path::PathBuf {
-    let resource_dir = app
-        .path()
-        .resource_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from("."));
-
-    let exe_dir = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
-        .unwrap_or_else(|| std::path::PathBuf::from("."));
-
-    let candidates = [
-        resource_dir.join("main.py"),
-        exe_dir.join("main.py"),
-        exe_dir.join("../../../main.py"),
-        exe_dir.join("../../../../main.py"),
-        std::path::PathBuf::from("main.py"),
-        std::path::PathBuf::from("../../main.py"),
-        std::path::PathBuf::from("../../../main.py"),
-        std::path::PathBuf::from(r"E:\Projects\TurboBond\main.py"),
-    ];
-
-    for path in &candidates {
-        if path.exists() {
-            if let Ok(canon) = path.canonicalize() {
-                return canon;
+fn connect_sidecar(app: &AppHandle, state: &SidecarState) -> Result<Connection, String> {
+    let mut guard = state.0.lock().map_err(|e| e.to_string())?;
+    if let Some(sidecar) = guard.as_mut() {
+        if sidecar.child.try_wait().map_err(|e| e.to_string())?.is_none() {
+            return Ok(sidecar.connection.clone());
+        }
+        *guard = None;
+    }
+    let mut cmd = sidecar_command(app)?;
+    cmd.env("TANDEM_RPC_PORT", "0").env("TANDEM_MANAGED", "1")
+        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::inherit());
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(0x08000000);
+    let mut child = cmd.spawn().map_err(|e| format!("Cannot launch backend: {e}"))?;
+    let output = child.stdout.take().ok_or("Backend output pipe unavailable")?;
+    let (tx, rx) = mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let mut sent = false;
+        for line in BufReader::new(output).lines() {
+            let Ok(line) = line else { break };
+            if !sent {
+                if let Ok(info) = serde_json::from_str::<Connection>(&line) {
+                    let _ = tx.send(info);
+                    sent = true;
+                }
             }
-            return path.clone();
+            // Keep draining stdout; never print the readiness token.
+        }
+    });
+    match rx.recv_timeout(Duration::from_secs(20)) {
+        Ok(connection) => {
+            *guard = Some(Sidecar { child, connection: connection.clone() });
+            Ok(connection)
+        }
+        Err(_) => {
+            stop_child(&mut child);
+            Err("Backend did not become ready. Check Python dependencies or reinstall Tandem.".into())
         }
     }
-
-    std::path::PathBuf::from("main.py")
 }
 
-fn find_python(app: &AppHandle) -> std::path::PathBuf {
-    // Prefer a bundled sidecar exe named `tandem-sidecar` or `python`
-    let resource_dir = app
-        .path()
-        .resource_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+#[tauri::command]
+async fn sidecar_connection(app: AppHandle) -> Result<Connection, String> {
+    tauri::async_runtime::spawn_blocking(move || connect_sidecar(&app, &app.state::<SidecarState>()))
+        .await.map_err(|e| e.to_string())?
+}
 
-    let candidates = [
-        resource_dir.join("python.exe"),
-        resource_dir.join("tandem-sidecar.exe"),
-        // Fall back to system Python on Windows
-        std::path::PathBuf::from("C:/msys64/ucrt64/bin/python.exe"),
-        std::path::PathBuf::from("python"),
-    ];
-
-    for path in &candidates {
-        if path.exists() || path.file_name().is_some_and(|n| n == "python") {
-            return path.clone();
-        }
+fn stop_sidecar(state: &SidecarState) {
+    if let Ok(mut guard) = state.0.lock() {
+        if let Some(mut sidecar) = guard.take() { stop_child(&mut sidecar.child); }
     }
-
-    std::path::PathBuf::from("python")
 }
-
-// ─── Main ─────────────────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_shell::init())
-        .manage(SidecarState(Mutex::new(None)))
+    let app = tauri::Builder::default()
+        .manage(SidecarState::default())
         .setup(|app| {
-            // System tray
-            let _tray = TrayIconBuilder::new()
-                .icon(app.default_window_icon().cloned().unwrap())
-                .tooltip("Tandem — Multi-Link Bonding")
-                .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::Click { .. } = event {
-                        let app = tray.app_handle();
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
+            if let Some(icon) = app.default_window_icon().cloned() {
+                TrayIconBuilder::new().icon(icon).tooltip("Tandem")
+                    .on_tray_icon_event(|tray, event| {
+                        if let TrayIconEvent::Click { .. } = event {
+                            if let Some(window) = tray.app_handle().get_webview_window("main") {
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
                         }
-                    }
-                })
-                .build(app)?;
-
-            // Auto-start the Python sidecar
-            let handle = app.handle().clone();
-            let state = app.state::<SidecarState>();
-            if let Err(e) = start_sidecar(handle.clone(), state) {
-                eprintln!("[Tandem] Sidecar start failed: {e}");
+                    }).build(app)?;
             }
-
             Ok(())
         })
-        .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { .. } = event {
-                // Kill sidecar on window close
-                let state = window.app_handle().state::<SidecarState>();
-                let mut guard = state.0.lock().unwrap();
-                if let Some(mut child) = guard.take() {
-                    child.kill().ok();
-                }
-            }
-        })
-        .invoke_handler(tauri::generate_handler![start_sidecar, stop_sidecar, sidecar_alive])
-        .run(tauri::generate_context!())
-        .expect("error while running Tandem application");
+        .invoke_handler(tauri::generate_handler![sidecar_connection])
+        .build(tauri::generate_context!())
+        .expect("Cannot initialize Tandem");
+    app.run(|app, event| {
+        if let tauri::RunEvent::ExitRequested { .. } = event {
+            stop_sidecar(&app.state::<SidecarState>());
+        }
+    });
 }

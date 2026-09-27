@@ -9,6 +9,7 @@ import socket
 import sys
 import threading
 import struct
+from urllib.parse import urlsplit
 from typing import List, Dict, Optional, Tuple, Callable
 
 class LocalDispatcher:
@@ -18,13 +19,17 @@ class LocalDispatcher:
         port: int = 8080,
         adapter_ips: Optional[List[str]] = None,
         strategy: str = 'round_robin',
-        on_stats_update: Optional[Callable] = None
+        on_stats_update: Optional[Callable] = None,
+        adapter_weights: Optional[Dict[str, int]] = None
     ):
         self.host = host
         self.port = port
         self.adapter_ips = adapter_ips or []
         self.strategy = strategy
         self.on_stats_update = on_stats_update
+        self.adapter_weights = adapter_weights or {}
+        self._clients = set()
+        self._cancel_start = threading.Event()
         self._server = None
         self._loop = None
         self._thread = None
@@ -110,15 +115,12 @@ class LocalDispatcher:
             if not self.adapter_ips:
                 return None
             
-            if self.strategy == 'round_robin':
-                ip = self.adapter_ips[self._round_robin_index % len(self.adapter_ips)]
-                self._round_robin_index += 1
-                return ip
-            else:
-                # Default fallback is round robin
-                ip = self.adapter_ips[self._round_robin_index % len(self.adapter_ips)]
-                self._round_robin_index += 1
-                return ip
+            pool = self.adapter_ips
+            if self.strategy == 'weighted':
+                pool = [ip for ip in self.adapter_ips for _ in range(max(1, min(100, int(self.adapter_weights.get(ip, 1)))))]
+            ip = pool[self._round_robin_index % len(pool)]
+            self._round_robin_index += 1
+            return ip
 
     async def start(self):
         self._loop = asyncio.get_running_loop()
@@ -129,6 +131,8 @@ class LocalDispatcher:
             )
             print(f"[Dispatcher] Started proxy server on {self.host}:{self.port}")
             self._started_event.set()
+            if self._cancel_start.is_set():
+                await self.stop()
             await self._stop_event.wait()
         except Exception as e:
             self._startup_error = e
@@ -140,43 +144,65 @@ class LocalDispatcher:
             self._server.close()
             await self._server.wait_closed()
             self._server = None
+        tasks = [t for t in self._clients if t is not asyncio.current_task()]
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
         if self._stop_event:
             self._stop_event.set()
         print("[Dispatcher] Server stopped")
 
     def start_in_thread(self, timeout: float = 3.0):
         if self._thread and self._thread.is_alive():
-            return
+            return True
 
+        self._cancel_start.clear()
         self._started_event.clear()
         self._startup_error = None
             
         def _run_loop():
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            loop.run_until_complete(self.start())
-            loop.close()
+            try:
+                loop.run_until_complete(self.start())
+                pending = asyncio.all_tasks(loop)
+                for task in pending:
+                    task.cancel()
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                loop.run_until_complete(loop.shutdown_asyncgens())
+            finally:
+                loop.close()
 
         self._thread = threading.Thread(target=_run_loop, daemon=True)
         self._thread.start()
 
         # Wait for the server socket to successfully bind or fail
         if not self._started_event.wait(timeout=timeout):
+            self._cancel_start.set()
+            self.stop_from_thread()
             raise TimeoutError("Timed out waiting for dispatcher proxy server to start.")
         if self._startup_error:
             raise self._startup_error
+        return True
 
     def stop_from_thread(self):
+        self._cancel_start.set()
         if self._loop and self._loop.is_running():
-            asyncio.run_coroutine_threadsafe(self.stop(), self._loop)
+            future = asyncio.run_coroutine_threadsafe(self.stop(), self._loop)
+            future.result(timeout=5)
         if self._thread:
-            self._thread.join(timeout=2.0)
+            self._thread.join(timeout=5)
+            if self._thread.is_alive():
+                raise TimeoutError("Dispatcher did not stop")
             self._thread = None
+        return True
 
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+        task = asyncio.current_task()
+        self._clients.add(task)
         try:
             # Read first byte to detect protocol
-            initial_data = await reader.read(1)
+            initial_data = await asyncio.wait_for(reader.read(1), 30)
             if not initial_data:
                 writer.close()
                 await writer.wait_closed()
@@ -186,7 +212,7 @@ class LocalDispatcher:
                 await self._handle_socks5(reader, writer, initial_data)
             else:
                 # Might be HTTP CONNECT
-                line = initial_data + await reader.readuntil(b'\r\n')
+                line = initial_data + await asyncio.wait_for(reader.readuntil(b'\r\n'), 30)
                 await self._handle_http_connect(reader, writer, line)
         except Exception as e:
             print(f"[Dispatcher] Client handling error: {e}", file=sys.stderr)
@@ -196,6 +222,10 @@ class LocalDispatcher:
             except Exception:
                 pass
 
+        finally:
+            writer.close()
+            self._clients.discard(task)
+
     async def _handle_socks5(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, initial_byte: bytes):
         try:
             # SOCKS5 greeting
@@ -203,6 +233,10 @@ class LocalDispatcher:
             nmethods = nmethods_data[0]
             methods = await reader.readexactly(nmethods)
             
+            if 0 not in methods:
+                writer.write(b'\x05\xff')
+                await writer.drain()
+                return
             # Send NO AUTH (0x05, 0x00)
             writer.write(b'\x05\x00')
             await writer.drain()
@@ -211,6 +245,8 @@ class LocalDispatcher:
             req_header = await reader.readexactly(4)
             version, cmd, rsv, atyp = req_header
 
+            if version != 5 or rsv != 0:
+                raise ValueError("Invalid SOCKS5 request")
             if cmd != 0x01: # Only CONNECT supported
                 writer.write(b'\x05\x07\x00\x01\x00\x00\x00\x00\x00\x00')
                 await writer.drain()
@@ -247,41 +283,128 @@ class LocalDispatcher:
             except Exception:
                 pass
 
-    async def _handle_http_connect(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, initial_line: bytes):
+    async def _handle_http_connect(self, reader, writer, initial_line):
+        remote_writer = None
+        adapter_ip = None
         try:
-            line_str = initial_line.decode('utf-8', errors='ignore')
-            if not line_str.startswith('CONNECT'):
-                raise Exception("Only HTTP CONNECT is supported")
-
-            parts = line_str.split(' ')
-            if len(parts) < 2:
-                raise Exception("Invalid HTTP CONNECT request")
-                
-            target = parts[1]
-            if ':' in target:
-                host, port_str = target.split(':', 1)
-                port = int(port_str)
-            else:
-                host = target
-                port = 443
-
-            # Read remaining headers until \r\n\r\n
+            method, target, version = initial_line.decode('ascii').strip().split(' ')
+            if version not in ('HTTP/1.0', 'HTTP/1.1'):
+                raise ValueError("Unsupported HTTP version")
+            headers = []
+            size = len(initial_line)
             while True:
-                line = await reader.readuntil(b'\r\n')
+                line = await asyncio.wait_for(reader.readuntil(b'\r\n'), 30)
+                size += len(line)
+                if size > 65536:
+                    raise ValueError("HTTP headers too large")
                 if line == b'\r\n':
                     break
+                name, value = line.decode('latin1').rstrip('\r\n').split(':', 1)
+                if not name or any(c not in "!#$%&'*+-.^_`|~0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ" for c in name):
+                    raise ValueError("Invalid HTTP header")
+                headers.append((name, value.strip()))
+            if method == 'CONNECT':
+                address = urlsplit('//' + target)
+                if not address.hostname or address.path or address.query or address.fragment or address.username:
+                    raise ValueError("Invalid CONNECT target")
+                await self._connect_and_relay(reader, writer, address.hostname, address.port or 443, False)
+                return
+            url = urlsplit(target)
+            if url.scheme != 'http' or not url.hostname or url.username or url.fragment:
+                raise ValueError("Expected an absolute HTTP URL")
+            lengths = [v for k, v in headers if k.lower() == 'content-length']
+            transfers = [v.lower() for k, v in headers if k.lower() == 'transfer-encoding']
+            if len(lengths) > 1 or len(transfers) > 1 or (lengths and transfers):
+                raise ValueError("Ambiguous request framing")
+            if lengths and (not lengths[0].isascii() or not lengths[0].isdigit()):
+                raise ValueError("Invalid Content-Length")
+            if transfers and transfers != ['chunked']:
+                raise ValueError("Unsupported transfer encoding")
+            adapter_ip = self._select_adapter()
+            if not adapter_ip:
+                raise ValueError("No selected adapters available")
+            remote_reader, remote_writer = await asyncio.wait_for(asyncio.open_connection(
+                url.hostname, url.port or 80, local_addr=(adapter_ip, 0)), 15)
+            self._update_stat(adapter_ip, 'connections_total', 1, True)
+            self._update_stat(adapter_ip, 'connections_active', 1, True)
+            connection_tokens = {v.strip().lower() for k, value in headers if k.lower() == 'connection' for v in value.split(',')}
+            if connection_tokens & {'content-length', 'transfer-encoding', 'host'}:
+                raise ValueError("Invalid connection header")
+            drop = {'proxy-connection', 'proxy-authorization', 'connection', 'keep-alive', 'upgrade', 'host'} | connection_tokens
+            clean = [(k, v) for k, v in headers if k.lower() not in drop]
+            clean += [('Host', url.netloc), ('Connection', 'close')]
+            path = url.path or '/'
+            if url.query:
+                path += '?' + url.query
+            head = f"{method} {path} {version}\r\n" + ''.join(f"{k}: {v}\r\n" for k, v in clean) + '\r\n'
+            remote_writer.write(head.encode('latin1'))
+            await remote_writer.drain()
 
-            await self._connect_and_relay(reader, writer, host, port, is_socks=False)
-
-        except Exception as e:
-            print(f"[Dispatcher] HTTP CONNECT error: {e}", file=sys.stderr)
-            # Send 502 Bad Gateway
-            writer.write(b'HTTP/1.1 502 Bad Gateway\r\n\r\n')
-            writer.close()
+            async def upload():
+                async def copy(count):
+                    while count:
+                        data = await asyncio.wait_for(reader.readexactly(min(count, 32768)), 30)
+                        remote_writer.write(data)
+                        await remote_writer.drain()
+                        self._update_stat(adapter_ip, 'bytes_tx', len(data), True)
+                        count -= len(data)
+                if lengths:
+                    await copy(int(lengths[0]))
+                elif transfers:
+                    while True:
+                        line = await asyncio.wait_for(reader.readuntil(b'\r\n'), 30)
+                        chunk_size = int(line.split(b';', 1)[0].strip(), 16)
+                        if chunk_size < 0:
+                            raise ValueError("Invalid chunk size")
+                        remote_writer.write(line)
+                        if chunk_size == 0:
+                            # Forward bounded trailers; do not forward another request.
+                            trailer_size = 0
+                            while True:
+                                trailer = await asyncio.wait_for(reader.readuntil(b'\r\n'), 30)
+                                trailer_size += len(trailer)
+                                if trailer_size > 65536:
+                                    raise ValueError("Trailers too large")
+                                remote_writer.write(trailer)
+                                if trailer == b'\r\n':
+                                    break
+                            await remote_writer.drain()
+                            break
+                        await copy(chunk_size)
+                        ending = await asyncio.wait_for(reader.readexactly(2), 30)
+                        if ending != b'\r\n':
+                            raise ValueError("Invalid chunk ending")
+                        remote_writer.write(ending)
+                        await remote_writer.drain()
+            async def download():
+                while True:
+                    data = await asyncio.wait_for(remote_reader.read(32768), 60)
+                    if not data:
+                        break
+                    writer.write(data)
+                    await writer.drain()
+                    self._update_stat(adapter_ip, 'bytes_rx', len(data), True)
+            up, down = asyncio.create_task(upload()), asyncio.create_task(download())
             try:
-                await writer.wait_closed()
-            except Exception:
-                pass
+                done, _ = await asyncio.wait((up, down), return_when=asyncio.FIRST_COMPLETED)
+                for task in done:
+                    task.result()
+                if down not in done:
+                    await down
+            finally:
+                for task in (up, down):
+                    task.cancel()
+                await asyncio.gather(up, down, return_exceptions=True)
+        except Exception:
+            if remote_writer is None:
+                writer.write(b'HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\nContent-Length: 0\r\n\r\n')
+                await writer.drain()
+        finally:
+            if remote_writer:
+                self._update_stat(adapter_ip, 'connections_active', -1, True)
+                remote_writer.close()
+                await remote_writer.wait_closed()
+            writer.close()
 
     async def _connect_and_relay(self, client_reader, client_writer, host, port, is_socks):
         adapter_ip = self._select_adapter()
@@ -296,9 +419,9 @@ class LocalDispatcher:
         try:
             # Try to connect via adapter
             try:
-                remote_reader, remote_writer = await asyncio.open_connection(
+                remote_reader, remote_writer = await asyncio.wait_for(asyncio.open_connection(
                     host, port, local_addr=(adapter_ip, 0)
-                )
+                ), 15)
             except Exception as e:
                 print(f"[Dispatcher] Connection via {adapter_ip} failed: {e}", file=sys.stderr)
                 # Could attempt fallback to other adapters here if needed

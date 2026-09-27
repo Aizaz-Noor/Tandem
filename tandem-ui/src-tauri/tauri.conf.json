@@ -17,7 +17,9 @@
       "icons/128x128@2x.png",
       "icons/icon.ico"
     ],
-    "resources": ["../../bin/*"],
+    "resources": [
+      "../../bin/*"
+    ],
     "windows": {
       "wix": {},
       "nsis": {}
@@ -25,7 +27,7 @@
   },
   "app": {
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost data:; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost ws://127.0.0.1:*; script-src 'self'"
     },
     "windows": [
       {
@@ -36,7 +38,7 @@
         "minHeight": 520,
         "resizable": true,
         "fullscreen": false,
-        "decorations": false,
+        "decorations": true,
         "transparent": false,
         "center": true
       }
@@ -44,9 +46,7 @@
   },
   "plugins": {
     "shell": {
-      "open": false,
-      "sidecar": true,
-      "scope": []
+      "open": false
     }
   }
 }
