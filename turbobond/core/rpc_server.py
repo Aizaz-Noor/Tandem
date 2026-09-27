@@ -22,9 +22,13 @@ from typing import Any, Dict, Optional, Set
 
 try:
     import websockets
-    from websockets.server import WebSocketServerProtocol
+    try:
+        from websockets.asyncio.server import ServerConnection as WebSocketConn
+    except ImportError:
+        from websockets.server import WebSocketServerProtocol as WebSocketConn  # type: ignore
 except ImportError:
     websockets = None  # type: ignore
+    WebSocketConn = Any  # type: ignore
 
 BASE_PORT = 7878
 logger = logging.getLogger("tandem.rpc")
@@ -67,7 +71,7 @@ class TandemRPCServer:
     def __init__(self, host: str = "127.0.0.1", port: int = BASE_PORT):
         self.host = host
         self.port = port
-        self._clients: Set[WebSocketServerProtocol] = set()
+        self._clients: Set[WebSocketConn] = set()
         self._lock = asyncio.Lock()
 
         # Core objects — loaded lazily on first use
@@ -104,7 +108,7 @@ class TandemRPCServer:
     # WebSocket connection lifecycle
     # ------------------------------------------------------------------
 
-    async def _handler(self, ws: "WebSocketServerProtocol"):
+    async def _handler(self, ws: WebSocketConn):
         self._clients.add(ws)
         logger.info("Client connected: %s", ws.remote_address)
         try:
@@ -121,7 +125,7 @@ class TandemRPCServer:
         finally:
             self._clients.discard(ws)
 
-    async def _send_state_snapshot(self, ws: "WebSocketServerProtocol"):
+    async def _send_state_snapshot(self, ws: WebSocketConn):
         """Push current config + adapter list to a freshly connected client."""
         cfg = self._ensure_config()
         adapters = self._core["detect_active_adapters"]()
@@ -152,7 +156,7 @@ class TandemRPCServer:
     # Dispatcher
     # ------------------------------------------------------------------
 
-    async def _dispatch(self, ws: "WebSocketServerProtocol", msg: Dict):
+    async def _dispatch(self, ws: WebSocketConn, msg: Dict):
         rpc_id = msg.get("id")
         method = msg.get("method", "")
         params = msg.get("params") or {}
