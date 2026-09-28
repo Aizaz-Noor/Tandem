@@ -7,7 +7,10 @@ and parses real-time tunnel status events.
 import os
 import sys
 import time
+import json
+import re
 import shutil
+import tempfile
 import threading
 import subprocess
 from turbobond.core.process_job import ProcessJob
@@ -108,6 +111,7 @@ class EngineManager:
         self._last_start_args = None
         self._generation = 0
         self._job = None
+        self._config_path = None
         self._lifecycle_lock = threading.RLock()
         from collections import deque
         self.log_buffer = deque(maxlen=200)
@@ -124,6 +128,19 @@ class EngineManager:
         with self._lifecycle_lock:
             return self._start(*args, **kwargs)
 
+    @staticmethod
+    def _secure_config_file(path):
+        if not sys.platform.startswith("win"):
+            os.chmod(path, 0o600)
+            return
+        identity = subprocess.run(["whoami", "/user", "/fo", "csv", "/nh"],
+                                  capture_output=True, text=True, check=True, timeout=5)
+        match = re.search(r"S-1-\d+(?:-\d+)+", identity.stdout)
+        if not match:
+            raise RuntimeError("Cannot determine current Windows user SID")
+        subprocess.run(["icacls", path, "/inheritance:r", "/grant:r", f"*{match.group()}:F"],
+                       capture_output=True, text=True, check=True, timeout=5)
+
     def _start(
         self,
         server_host: str,
@@ -131,12 +148,15 @@ class EngineManager:
         auth_key: str,
         adapter_names: List[str],
         scheduler: str = "wlb",
-        insecure: bool = True,
+        insecure: bool = False,
         dns_servers: Optional[List[str]] = None
     ) -> bool:
         """Start the mqvpn bonding tunnel."""
         if self.process and self.process.poll() is None:
             return True  # Already running
+        if self._config_path:
+            self._remove_config(self._config_path)
+            self._config_path = None
 
         bin_path = locate_engine_binary()
         if not bin_path:
@@ -151,7 +171,6 @@ class EngineManager:
             bin_path,
             "--mode", "client",
             "--server", f"{server_host}:{server_port}",
-            "--auth-key", auth_key,
             "--scheduler", scheduler
         ]
 
@@ -181,6 +200,15 @@ class EngineManager:
             creationflags = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
 
         try:
+            fd, config_path = tempfile.mkstemp(prefix="tandem-mqvpn-", suffix=".json")
+            self._config_path = config_path
+            os.close(fd)
+            self._secure_config_file(config_path)
+            with open(config_path, "w", encoding="utf-8") as stream:
+                json.dump({"auth_key": auth_key}, stream)
+                stream.flush()
+                os.fsync(stream.fileno())
+            cmd[1:1] = ["--config", config_path]
             if self._job:
                 self._job.close()
             self._job = ProcessJob()
@@ -196,7 +224,7 @@ class EngineManager:
             )
 
             self._job.assign(self.process)
-            self.reader_thread = threading.Thread(target=self._read_output, args=(self.process, generation), daemon=True)
+            self.reader_thread = threading.Thread(target=self._read_output, args=(self.process, generation, config_path), daemon=True)
             self.reader_thread.start()
 
             # Start connection timeout watchdog
@@ -252,9 +280,21 @@ class EngineManager:
         if self._job:
             self._job.close()
             self._job = None
+        self._remove_config(self._config_path)
+        self._config_path = None
         self._set_state(TunnelState.DISCONNECTED, "Disconnected")
 
-    def _read_output(self, proc=None, generation=None):
+    @staticmethod
+    def _remove_config(path):
+        if path:
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                print(f"[Engine] Cannot remove temporary credentials: {exc}", file=sys.stderr)
+
+    def _read_output(self, proc=None, generation=None, config_path=None):
         """Continuously read process stdout/stderr to detect connection status."""
         proc = proc or self.process
         generation = self._generation if generation is None else generation
@@ -297,6 +337,9 @@ class EngineManager:
         except subprocess.TimeoutExpired:
             proc.kill()
             exit_code = proc.wait(timeout=3)
+        self._remove_config(config_path)
+        if self._config_path == config_path:
+            self._config_path = None
         if not self._stop_requested:
             if exit_code and exit_code != 0:
                 # Provide a human-friendly error message based on logs

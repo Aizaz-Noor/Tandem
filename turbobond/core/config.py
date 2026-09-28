@@ -23,11 +23,11 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "adapter_weights": {},  # {"Wi-Fi": 3, "Ethernet 2": 1}  — used in weighted mode
 
     # --- Cloud Bonding Settings (legacy) ---
-    "server_host": "150.136.212.160",
+    "server_host": "",
     "server_port": 443,
     "auth_key": "",
     "scheduler": "wlb",
-    "insecure": True,
+    "insecure": False,
     "dns": ["1.1.1.1", "8.8.8.8"],
 
     # --- Common Settings ---

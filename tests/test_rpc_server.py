@@ -82,7 +82,7 @@ def test_invalid_mode_and_kill_switch(server):
 
 
 def test_cloud_arguments_and_truthful_state(server):
-    server._config.update({"auth_key": "test-secret", "auto_reconnect": False})
+    server._config.update({"server_host": "vpn.example.test", "auth_key": "test-secret", "auto_reconnect": False})
     async def run():
         await server._h_start_cloud({"selected_adapters": ["Phone"]})
         assert not server._bonding_active

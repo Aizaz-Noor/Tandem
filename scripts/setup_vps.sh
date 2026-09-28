@@ -15,12 +15,20 @@ sudo mkdir -p /opt/turbobond-server/config
 
 cat << 'DOCKERFILE' | sudo tee /opt/turbobond-server/Dockerfile
 FROM ubuntu:24.04
-RUN apt-get update -qq && \
-    apt-get install -y -qq curl ca-certificates iproute2 iptables openssl libevent-2.1-7t64 && \
-    ARCH=$(dpkg --print-architecture) && \
-    curl -sLO https://github.com/mp0rta/mqvpn/releases/latest/download/mqvpn_0.16.3_${ARCH}.deb && \
-    dpkg -i mqvpn_0.16.3_${ARCH}.deb && \
-    rm mqvpn_0.16.3_${ARCH}.deb && \
+RUN set -eu; \
+    apt-get update -qq; \
+    apt-get install -y -qq curl ca-certificates iproute2 iptables openssl libevent-2.1-7t64; \
+    ARCH=$(dpkg --print-architecture); \
+    case "$ARCH" in \
+      amd64) HASH=3dbc15c66932c74266728564499f7279198a77284ec0d2d94bec520b19321db6 ;; \
+      arm64) HASH=179824b94ae1355296c9167a5a87f96d2073aa60ae8f07be3d0e3af474fd5541 ;; \
+      *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
+    esac; \
+    PACKAGE=mqvpn_0.16.3_${ARCH}.deb; \
+    curl -fSL --retry 3 -o "$PACKAGE" "https://github.com/mp0rta/mqvpn/releases/download/v0.16.3/$PACKAGE"; \
+    echo "$HASH  $PACKAGE" | sha256sum -c -; \
+    dpkg -i "$PACKAGE"; \
+    rm "$PACKAGE"; \
     rm -rf /var/lib/apt/lists/*
 
 COPY entrypoint.sh /entrypoint.sh
@@ -71,7 +79,7 @@ sudo chmod +x /opt/turbobond-server/entrypoint.sh
 # Generate server.conf if not already present
 if [ ! -f /opt/turbobond-server/config/server.conf ]; then
     KEY=$(openssl rand -base64 32)
-    cat << CFG | sudo tee /opt/turbobond-server/config/server.conf
+    cat << CFG | sudo tee /opt/turbobond-server/config/server.conf >/dev/null
 [Interface]
 Listen = 0.0.0.0:443
 Subnet = 10.8.0.0/24
@@ -87,6 +95,7 @@ Key = $KEY
 Scheduler = wlb
 CC = bbr2
 CFG
+    sudo chmod 600 /opt/turbobond-server/config/server.conf
 fi
 
 # Enable host forwarding
@@ -94,8 +103,10 @@ sudo sysctl -w net.ipv4.ip_forward=1
 sudo sed -i '/net.ipv4.ip_forward/d' /etc/sysctl.conf
 echo "net.ipv4.ip_forward=1" | sudo tee -a /etc/sysctl.conf
 
-# Allow UDP 443 through ufw
-sudo ufw allow 443/udp
+# Allow UDP 443 where UFW is installed; some Ubuntu images use a provider firewall.
+if command -v ufw >/dev/null 2>&1; then
+    sudo ufw allow 443/udp
+fi
 
 # Build Docker image
 cd /opt/turbobond-server
@@ -115,7 +126,6 @@ sudo docker run -d \
     turbobond-server:latest
 
 echo "============================================================"
-echo "TURBOBOND SERVER READY (UAE NORTH)!"
-echo -n "AUTH KEY: "
-sudo grep -i "^Key =" /opt/turbobond-server/config/server.conf | awk '{print $3}'
+echo "TURBOBOND SERVER READY"
+echo "Auth key is stored in /opt/turbobond-server/config/server.conf (root access required)."
 echo "============================================================"

@@ -329,7 +329,7 @@ class SettingsDialog(ctk.CTkToplevel):
             border_color=Colors.BORDER_MUTED,
             text_color=Colors.TEXT_HERO
         )
-        self.host_entry.insert(0, str(self.config.get("server_host", "150.136.212.160")))
+        self.host_entry.insert(0, str(self.config.get("server_host", "")))
         self._bind_focus_glow(self.host_entry)
         self.host_entry.grid(row=0, column=1, sticky="w", padx=16, pady=8)
 
@@ -385,7 +385,7 @@ class SettingsDialog(ctk.CTkToplevel):
         self.scheduler_menu.grid(row=3, column=1, sticky="w", padx=16, pady=8)
 
         # Insecure Checkbox
-        self.insecure_var = ctk.BooleanVar(value=bool(self.config.get("insecure", True)))
+        self.insecure_var = ctk.BooleanVar(value=bool(self.config.get("insecure", False)))
         self.insecure_check = ctk.CTkCheckBox(
             form_card,
             text="Allow Self-Signed TLS Certificate",
@@ -550,7 +550,7 @@ class SettingsDialog(ctk.CTkToplevel):
         )
         if path:
             if self.config.export_profile(path):
-                messagebox.showinfo("Export Success", "Profile successfully exported!\nShare this file with your friends.", parent=self)
+                messagebox.showinfo("Export Success", "Profile exported as plain JSON, including your Auth Key. Share it only through a trusted channel.", parent=self)
             else:
                 messagebox.showerror("Export Failed", "Could not write profile file.", parent=self)
 
@@ -572,7 +572,7 @@ class SettingsDialog(ctk.CTkToplevel):
 
                 sched = self.config.get("scheduler", "wlb")
                 self.scheduler_menu.set("minrtt (Low Latency / Gaming)" if sched == "minrtt" else "wlb (Balanced Throughput)")
-                self.insecure_var.set(bool(self.config.get("insecure", True)))
+                self.insecure_var.set(bool(self.config.get("insecure", False)))
 
                 # Update Local Dispatcher fields if present in imported profile
                 if "proxy_port" in self.config.data:

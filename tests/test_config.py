@@ -10,7 +10,8 @@ def test_config_crud():
         cfg = ConfigManager(filepath=cfg_path)
         
         # Test defaults
-        assert cfg.get("server_host") == "150.136.212.160"
+        assert cfg.get("server_host") == ""
+        assert cfg.get("insecure") is False
         assert cfg.get("server_port") == 443
         
         # Test update

@@ -29,7 +29,9 @@ class LocalDispatcher:
         self.on_stats_update = on_stats_update
         self.adapter_weights = adapter_weights or {}
         self._clients = set()
+        self._client_writers = {}
         self._cancel_start = threading.Event()
+        self._stopping = False
         self._server = None
         self._loop = None
         self._thread = None
@@ -125,6 +127,7 @@ class LocalDispatcher:
             return ip
 
     async def start(self):
+        self._stopping = False
         self._loop = asyncio.get_running_loop()
         self._stop_event = asyncio.Event()
         try:
@@ -142,15 +145,31 @@ class LocalDispatcher:
             print(f"[Dispatcher] Failed to start server: {e}", file=sys.stderr)
 
     async def stop(self):
+        self._stopping = True
         server, self._server = self._server, None
         if server:
             server.close()
         tasks = [t for t in self._clients if t is not asyncio.current_task()]
+        writers = [self._client_writers.get(task) for task in tasks]
+        for writer in writers:
+            if writer is not None:
+                writer.close()
         for task in tasks:
             task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-        if server:
-            await server.wait_closed()
+        if tasks:
+            waiter = asyncio.gather(*tasks, return_exceptions=True)
+            try:
+                await asyncio.wait_for(waiter, timeout=1.0)
+            except asyncio.TimeoutError:
+                # A platform transport may leave a handler blocked after cancel;
+                # retain the bounded shutdown and release our client references.
+                pass
+        self._clients.difference_update(tasks)
+        for task in tasks:
+            self._client_writers.pop(task, None)
+        # StreamServer.wait_closed() also waits for active client callbacks.
+        # They have already been cancelled and gathered above, so wait_closed
+        # is unnecessary here and can hang on some asyncio implementations.
         if self._stop_event:
             self._stop_event.set()
         print("[Dispatcher] Server stopped")
@@ -201,8 +220,12 @@ class LocalDispatcher:
         return True
 
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+        if self._stopping:
+            writer.close()
+            return
         task = asyncio.current_task()
         self._clients.add(task)
+        self._client_writers[task] = writer
         try:
             # Read first byte to detect protocol
             initial_data = await asyncio.wait_for(reader.read(1), 30)
@@ -228,6 +251,7 @@ class LocalDispatcher:
         finally:
             writer.close()
             self._clients.discard(task)
+            self._client_writers.pop(task, None)
 
     async def _handle_socks5(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, initial_byte: bytes):
         try:

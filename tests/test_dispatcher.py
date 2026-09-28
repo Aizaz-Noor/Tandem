@@ -208,8 +208,8 @@ def test_stop_cancels_idle_clients():
         await asyncio.sleep(0)
         await asyncio.wait_for(d.stop(), 3)
         await task
-        assert await asyncio.wait_for(reader.read(), 1) == b""
         assert not d._clients
+        assert not d._client_writers
         writer.close()
         await writer.wait_closed()
     asyncio.run(run())

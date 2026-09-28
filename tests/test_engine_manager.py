@@ -84,3 +84,55 @@ def test_windows_job_terminates_owned_child():
         if child.poll() is None:
             child.kill()
             child.wait()
+
+
+def test_cloud_key_is_not_passed_in_process_arguments(tmp_path):
+    import json
+    from pathlib import Path
+    from unittest.mock import MagicMock, patch
+
+    process = MagicMock()
+    process.poll.return_value = None
+    with patch("turbobond.core.engine_manager.locate_engine_binary", return_value=str(tmp_path / "mqvpn.exe")), \
+         patch("turbobond.core.engine_manager.subprocess.Popen", return_value=process) as popen, \
+         patch("turbobond.core.engine_manager.ProcessJob"), \
+         patch.object(EngineManager, "_secure_config_file"), \
+         patch("turbobond.core.engine_manager.threading.Thread"):
+        engine = EngineManager()
+        assert engine.start("vpn.example.test", 443, "test-private-key", ["Wi-Fi"])
+        command = popen.call_args.args[0]
+        assert "test-private-key" not in command
+        assert "--auth-key" not in command
+        config_path = Path(command[command.index("--config") + 1])
+        assert json.loads(config_path.read_text(encoding="utf-8")) == {"auth_key": "test-private-key"}
+        engine.stop()
+        assert not config_path.exists()
+
+
+def test_temporary_cloud_config_is_private(tmp_path):
+    import os
+    import sys
+    path = tmp_path / "auth.json"
+    path.write_text('{"auth_key":"test"}', encoding="utf-8")
+    EngineManager._secure_config_file(str(path))
+    if not sys.platform.startswith("win"):
+        assert os.stat(path).st_mode & 0o077 == 0
+
+
+def test_cloud_launch_failure_removes_temporary_key(tmp_path):
+    import tempfile
+    from unittest.mock import patch
+
+    real_mkstemp = tempfile.mkstemp
+    def local_mkstemp(*args, **kwargs):
+        return real_mkstemp(*args, **kwargs, dir=tmp_path)
+
+    with patch("turbobond.core.engine_manager.locate_engine_binary", return_value=str(tmp_path / "mqvpn.exe")), \
+         patch("turbobond.core.engine_manager.subprocess.Popen", side_effect=OSError("launch failed")), \
+         patch("turbobond.core.engine_manager.ProcessJob"), \
+         patch("turbobond.core.engine_manager.tempfile.mkstemp", side_effect=local_mkstemp), \
+         patch.object(EngineManager, "_secure_config_file"):
+        engine = EngineManager()
+        assert not engine.start("vpn.example.test", 443, "test-private-key", ["Wi-Fi"])
+        assert engine._config_path is None
+        assert not list(tmp_path.glob("tandem-mqvpn-*.json"))

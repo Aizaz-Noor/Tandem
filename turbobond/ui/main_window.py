@@ -619,7 +619,7 @@ class MainWindow(ctk.CTk):
                 text="Tip: Local Dispatcher routes parallel download streams directly across your adapters at 5ms ping — zero encryption overhead!"
             )
         else:
-            server_ip = self.config.get("server_host", "150.136.212.160")
+            server_ip = self.config.get("server_host", "")
             server_port = self.config.get("server_port", 443)
             self.footer_lbl.configure(
                 text=f"Gateway: {server_ip}:{server_port} · Protocol: Multipath QUIC VPN"
@@ -1089,15 +1089,15 @@ class MainWindow(ctk.CTk):
             )
             return
 
-        host = self.config.get("server_host", "150.136.212.160")
+        host = self.config.get("server_host", "")
         port = int(self.config.get("server_port", 443))
         key = self.config.get("auth_key", "")
         sched = self.config.get("scheduler", "wlb")
-        insecure = bool(self.config.get("insecure", True))
+        insecure = bool(self.config.get("insecure", False))
         dns = self.config.get("dns", ["1.1.1.1", "8.8.8.8"])
 
-        if not key:
-            messagebox.showerror("Missing Auth Key", "Please configure the server Auth Key in Settings before connecting.", parent=self)
+        if not host or not key:
+            messagebox.showerror("Missing Cloud Settings", "Please configure the server host and Auth Key in Settings before connecting.", parent=self)
             self._open_settings()
             return
 

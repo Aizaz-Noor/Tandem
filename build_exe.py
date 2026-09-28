@@ -15,6 +15,9 @@ def build_sidecar():
     separator = ";" if os.name == "nt" else ":"
     subprocess.run([sys.executable, "-m", "PyInstaller", "--noconfirm", "--onedir",
         "--name", "tandem-sidecar", "--console", "--collect-all", "websockets",
+        "--exclude-module", "turbobond.ui", "--exclude-module", "customtkinter",
+        "--exclude-module", "pystray", "--exclude-module", "PIL",
+        "--exclude-module", "tkinter", "--exclude-module", "_tkinter",
         "--add-data", f"{ROOT / 'bin'}{separator}bin", str(ROOT / "main.py")], cwd=ROOT, check=True)
     directory = ROOT / "dist" / "tandem-sidecar"
     config = {"bundle": {"resources": {str(directory).replace("\\", "/") + "/": "sidecar/"}}}

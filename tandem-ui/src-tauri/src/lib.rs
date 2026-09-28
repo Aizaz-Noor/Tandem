@@ -11,18 +11,6 @@ struct Sidecar { child: Child, connection: Connection }
 #[derive(Default)]
 struct SidecarState(Mutex<Option<Sidecar>>);
 
-#[cfg(target_os = "windows")]
-fn ensure_direct_internet() {
-    let _ = Command::new("cmd")
-        .args(["/c", "reg add \"HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings\" /v ProxyEnable /t REG_DWORD /d 0 /f"])
-        .creation_flags(0x08000000)
-        .output();
-    let _ = Command::new("cmd")
-        .args(["/c", "reg delete \"HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings\" /v TandemProxyBackup /f"])
-        .creation_flags(0x08000000)
-        .output();
-}
-
 fn sidecar_command(app: &AppHandle) -> Result<Command, String> {
     let name = if cfg!(windows) { "tandem-sidecar.exe" } else { "tandem-sidecar" };
 
@@ -114,8 +102,6 @@ fn connect_sidecar(app: &AppHandle, state: &SidecarState) -> Result<Connection, 
         }
         Err(_) => {
             stop_child(&mut child);
-            #[cfg(target_os = "windows")]
-            ensure_direct_internet();
             Err("Backend did not become ready. Check Python dependencies or reinstall Tandem.".into())
         }
     }
@@ -138,8 +124,6 @@ pub fn run() {
     let app = tauri::Builder::default()
         .manage(SidecarState::default())
         .setup(|app| {
-            #[cfg(target_os = "windows")]
-            ensure_direct_internet();
             if let Some(icon) = app.default_window_icon().cloned() {
                 TrayIconBuilder::new().icon(icon).tooltip("Tandem")
                     .on_tray_icon_event(|tray, event| {
@@ -160,8 +144,6 @@ pub fn run() {
         match event {
             tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
                 stop_sidecar(&app.state::<SidecarState>());
-                #[cfg(target_os = "windows")]
-                ensure_direct_internet();
             }
             _ => {}
         }
