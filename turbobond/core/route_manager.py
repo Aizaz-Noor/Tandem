@@ -83,7 +83,7 @@ class RouteManager:
                 "powershell",
                 "-NoProfile",
                 "-Command",
-                f"(Get-NetIPInterface -InterfaceAlias '{alias}' -AddressFamily IPv4).InterfaceMetric"
+                f"(Get-NetIPInterface -InterfaceAlias '{alias.replace(chr(39), chr(39) * 2)}' -AddressFamily IPv4).InterfaceMetric"
             ]
             res = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
             if res.returncode == 0:
@@ -122,7 +122,7 @@ class RouteManager:
                 
                 # Set metric very low so bound sockets prefer it
                 try:
-                    subprocess.run(["powershell", "-NoProfile", "-Command", f"Set-NetIPInterface -InterfaceAlias '{name}' -InterfaceMetric 10"], check=True, timeout=10, capture_output=True)
+                    subprocess.run(["powershell", "-NoProfile", "-Command", f"Set-NetIPInterface -InterfaceAlias '{name.replace(chr(39), chr(39) * 2)}' -InterfaceMetric 10"], check=True, timeout=10, capture_output=True)
                 except subprocess.CalledProcessError as e:
                     self.log_warning(f"Failed to set interface metric for {name}: {e.stderr}")
                     success = False
@@ -130,7 +130,7 @@ class RouteManager:
                 
                 # Add specific source-based route
                 try:
-                    cmd = f"New-NetRoute -DestinationPrefix '0.0.0.0/0' -InterfaceAlias '{name}' -NextHop '{gw}' -RouteMetric 10 -PolicyStore ActiveStore"
+                    cmd = f"New-NetRoute -DestinationPrefix '0.0.0.0/0' -InterfaceAlias '{name.replace(chr(39), chr(39) * 2)}' -NextHop '{gw}' -RouteMetric 10 -PolicyStore ActiveStore"
                     subprocess.run(["powershell", "-NoProfile", "-Command", cmd], check=True, timeout=10, capture_output=True)
                     self.added_routes.append({'alias': name, 'gateway': gw, 'prefix': '0.0.0.0/0'})
                 except subprocess.CalledProcessError as e:
@@ -181,7 +181,7 @@ class RouteManager:
                 gw = route['gateway']
                 prefix = route['prefix']
                 try:
-                    cmd = f"Remove-NetRoute -DestinationPrefix '{prefix}' -InterfaceAlias '{alias}' -NextHop '{gw}' -PolicyStore ActiveStore -Confirm:$false"
+                    cmd = f"Remove-NetRoute -DestinationPrefix '{prefix}' -InterfaceAlias '{alias.replace(chr(39), chr(39) * 2)}' -NextHop '{gw}' -PolicyStore ActiveStore -Confirm:$false"
                     subprocess.run(["powershell", "-NoProfile", "-Command", cmd], check=True, timeout=10, capture_output=True)
                 except subprocess.CalledProcessError as e:
                     self.log_warning(f"Failed to remove route for {alias}: {e.stderr}")
@@ -190,7 +190,7 @@ class RouteManager:
             # Restore original metrics
             for alias, metric in self.modified_metrics.items():
                 try:
-                    cmd = f"Set-NetIPInterface -InterfaceAlias '{alias}' -InterfaceMetric {metric}"
+                    cmd = f"Set-NetIPInterface -InterfaceAlias '{alias.replace(chr(39), chr(39) * 2)}' -InterfaceMetric {metric}"
                     subprocess.run(["powershell", "-NoProfile", "-Command", cmd], check=True, timeout=10, capture_output=True)
                 except subprocess.CalledProcessError as e:
                     self.log_warning(f"Failed to restore metric for {alias}: {e.stderr}")
@@ -204,7 +204,7 @@ class RouteManager:
                 ip_addr = info['ip']
                 table = info['table']
                 try:
-                    subprocess.run(["ip", "rule", "del", "from", ip_addr], check=True, timeout=10, capture_output=True)
+                    subprocess.run(["ip", "rule", "del", "from", ip_addr, "table", str(table)], check=True, timeout=10, capture_output=True)
                     subprocess.run(["ip", "route", "flush", "table", str(table)], check=True, timeout=10, capture_output=True)
                 except subprocess.CalledProcessError as e:
                     self.log_warning(f"Failed to cleanup linux routing for {name}: {e.stderr}")

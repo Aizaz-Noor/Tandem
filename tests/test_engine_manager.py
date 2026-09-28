@@ -43,3 +43,44 @@ def test_non_fatal_xquic_log_handling():
     # The line contains 'error', but must NOT match fatal triggers
     is_fatal = any(k in lower for k in ["fatal", "panic", "iface pin failed", "auth failed", "permission denied"])
     assert is_fatal is False
+
+
+def test_stale_watchdog_cannot_stop_new_connection():
+    from unittest.mock import patch
+    engine = EngineManager()
+    engine._generation = 2
+    engine.state = TunnelState.CONNECTING
+    with patch.object(engine, "stop") as stop:
+        engine._connection_timeout_watchdog(timeout=0, generation=1)
+    stop.assert_not_called()
+    assert engine.state == TunnelState.CONNECTING
+
+
+def test_state_callback_failure_does_not_break_cleanup():
+    def failed(*args):
+        raise RuntimeError("callback failed")
+    engine = EngineManager(on_state_change=failed)
+    engine._set_state(TunnelState.CONNECTING)
+    engine.stop()
+    assert engine.state == TunnelState.DISCONNECTED
+
+
+def test_windows_job_terminates_owned_child():
+    import os
+    import subprocess
+    import sys
+    from turbobond.core.process_job import ProcessJob
+    if os.name != "nt":
+        pytest.skip("Windows job-object behavior")
+    job = ProcessJob()
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], creationflags=subprocess.CREATE_NO_WINDOW)
+    try:
+        job.assign(child)
+        job.close()
+        child.wait(timeout=5)
+        assert child.poll() is not None
+    finally:
+        job.close()
+        if child.poll() is None:
+            child.kill()
+            child.wait()

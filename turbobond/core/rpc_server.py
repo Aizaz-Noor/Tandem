@@ -15,7 +15,7 @@ import websockets
 from turbobond.core.config import ConfigManager, validate_patch
 from turbobond.core.detector import detect_active_adapters
 from turbobond.core.dispatcher import LocalDispatcher
-from turbobond.core.engine_manager import EngineManager, TunnelState
+from turbobond.core.engine_manager import EngineManager, TunnelState, is_elevated
 from turbobond.core.system_proxy import SystemProxyConfig
 from turbobond.core.telemetry import BandwidthMonitor
 
@@ -28,7 +28,7 @@ class TandemRPCServer:
         if host != "127.0.0.1":
             raise ValueError("The desktop RPC server must bind to loopback")
         self.host, self.port = host, port
-        self.token = token
+        self.token = token or secrets.token_urlsafe(32)
         self._config = config
         self._clients = set()
         self._lock = asyncio.Lock()
@@ -83,7 +83,6 @@ class TandemRPCServer:
                 if not isinstance(supplied, str) or not secrets.compare_digest(supplied, self.token):
                     await ws.close(code=1008, reason="Authentication required")
                     return
-            self._clients.add(ws)
             if not self._adapters:
                 await self._detect()
             await ws.send(json.dumps({"event": "state_snapshot", "data": {
@@ -92,6 +91,7 @@ class TandemRPCServer:
                 "engine_state": self._engine.state.name if self._engine else "DISCONNECTED",
                 "logs": list(self._logs),
             }}))
+            self._clients.add(ws)
             async for raw in ws:
                 try:
                     await self._dispatch(ws, json.loads(raw))
@@ -164,7 +164,8 @@ class TandemRPCServer:
             if self._dispatcher:
                 usable = self._usable(adapters, self._selected)
                 self._active_names = [a["name"] for a in usable]
-                self._dispatcher.update_adapters([a["ip"] for a in usable])
+                self._dispatcher.update_adapters([a["ip"] for a in usable],
+                    {a["ip"]: self._ensure_config().get("adapter_weights", {}).get(a["name"], 1) for a in usable})
         await self._broadcast("adapters", adapters)
         return adapters
 
@@ -203,6 +204,8 @@ class TandemRPCServer:
                     validate_patch(cloud)
                     if not cloud["server_host"].strip() or not cloud["auth_key"].strip():
                         raise ValueError("Cloud bonding requires a server host and auth key")
+                    if sys.platform.startswith("win") and not is_elevated():
+                        raise RuntimeError("Cloud bonding requires Administrator rights. Close Tandem and run it as Administrator.")
                     engine = EngineManager()
                     self._engine = engine
                     engine.auto_reconnect = cfg.get("auto_reconnect")
@@ -314,6 +317,7 @@ class TandemRPCServer:
                     except Exception as exc:
                         await self._log("error", f"Auto-connect failed: {exc}")
                 await self._shutdown.wait()
+                await self._h_stop_bonding({})
         finally:
             if self._adapter_task:
                 self._adapter_task.cancel()

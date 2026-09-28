@@ -25,7 +25,10 @@ def test_detect_active_adapters():
         assert "ip" in adapters[0]
 
 
-def test_optimize_windows_multilink():
+def test_optimize_windows_multilink(monkeypatch):
+    import sys
+    from unittest.mock import MagicMock
+    monkeypatch.setitem(sys.modules, "winreg", MagicMock())
     # Should execute safely without raising exceptions regardless of elevation
     res = optimize_windows_multilink()
     assert isinstance(res, bool)

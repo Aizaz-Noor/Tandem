@@ -33,7 +33,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # --- Common Settings ---
     "kill_switch": False,
     "auto_reconnect": True,
-    "auto_connect_on_launch": True,
+    "auto_connect_on_launch": False,
     "selected_adapters": []
 }
 

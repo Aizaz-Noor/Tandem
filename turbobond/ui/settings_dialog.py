@@ -467,29 +467,12 @@ class SettingsDialog(ctk.CTkToplevel):
                     ))
                     return
 
-                try:
-                    from verify_setup import run_diagnostics
-                    passed = run_diagnostics()
-                except Exception:
-                    passed = reachable
-
-                if passed:
-                    self._safe_after(lambda: messagebox.showinfo(
-                        "Connection 100% Verified",
-                        f"SUCCESS!\n\nServer at {host}:{port} is reachable and verified.\nTandem is ready to bond your links!",
-                        parent=self
-                    ))
-                else:
-                    self._safe_after(lambda: messagebox.showwarning(
-                        "Firewall Action Needed",
-                        f"The server is online, but UDP {port} did not reply.\n\n"
-                        "Please verify your cloud firewall has:\n"
-                        "• Destination Port: 443\n"
-                        "• Protocol: UDP\n"
-                        "• Source Port: *\n"
-                        "• Action: Allow",
-                        parent=self
-                    ))
+                self._safe_after(lambda: messagebox.showinfo(
+                    "Server Reachable",
+                    f"The host {host} responded to a basic network probe.\n\n"
+                    f"This does not verify the UDP tunnel on port {port}, credentials, or bonding. "
+                    "Start Cloud Bonding to test the full connection.", parent=self
+                ))
             finally:
                 self._safe_after(lambda: self.btn_test.configure(text="Test Cloud Connection", state="normal"))
 
@@ -533,22 +516,22 @@ class SettingsDialog(ctk.CTkToplevel):
         sched_val = "minrtt" if "minrtt" in self.scheduler_menu.get() else "wlb"
         dist_val = "weighted" if "Weighted" in self.dist_strategy_menu.get() else "round_robin"
 
-        self.config.data["proxy_port"] = proxy_port
-        self.config.data["distribution_strategy"] = dist_val
-        self.config.data["auto_system_proxy"] = self.auto_proxy_var.get()
-        self.config.data["auto_connect_on_launch"] = self.auto_connect_var.get()
-        self.config.data["server_host"] = host
-        self.config.data["server_port"] = port
-        self.config.data["auth_key"] = auth_key
-        self.config.data["scheduler"] = sched_val
-        self.config.data["insecure"] = self.insecure_var.get()
-        return True
+        try:
+            self.config.update({
+                "proxy_port": proxy_port, "distribution_strategy": dist_val,
+                "auto_system_proxy": self.auto_proxy_var.get(),
+                "auto_connect_on_launch": self.auto_connect_var.get(),
+                "server_host": host, "server_port": port, "auth_key": auth_key,
+                "scheduler": sched_val, "insecure": self.insecure_var.get(),
+            })
+            return True
+        except (OSError, ValueError) as exc:
+            messagebox.showerror("Save Failed", str(exc), parent=self)
+            return False
 
     def _save_settings(self):
         if not self._sync_inputs_to_config():
             return
-
-        self.config.save()
 
         if self.on_save_callback:
             self.on_save_callback()

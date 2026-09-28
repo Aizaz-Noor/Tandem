@@ -6,6 +6,11 @@ import pytest
 
 from turbobond.core.route_manager import RouteManager
 
+@pytest.fixture(autouse=True, params=["Windows", "Linux"])
+def operating_system(request):
+    with patch("turbobond.core.route_manager.platform.system", return_value=request.param):
+        yield
+
 
 @patch("turbobond.core.route_manager.subprocess.run")
 def test_get_adapter_gateways(mock_run):

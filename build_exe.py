@@ -1,81 +1,48 @@
-"""
-Tandem - Automated Build Script
-Builds the standalone Tauri 2.0 executable (recommended) or legacy PyInstaller bundle.
-"""
-
+"""Build a self-contained desktop installer, including the Python sidecar."""
+import argparse
+import json
 import os
-import sys
+from pathlib import Path
+import shutil
 import subprocess
+import sys
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-TAURI_DIR = os.path.join(BASE_DIR, "tandem-ui")
-SEP = ";" if sys.platform.startswith("win") else ":"
-
-
-def build_tauri():
-    print("=== Building Tandem (Tauri 2.0 + React + Tailwind) ===")
-    env = os.environ.copy()
-    cargo_bin = os.path.expanduser(r"~\.cargo\bin")
-    ucrt_bin = r"C:\msys64\ucrt64\bin"
-    extra_paths = [p for p in [cargo_bin, ucrt_bin] if os.path.exists(p)]
-    if extra_paths:
-        env["PATH"] = os.pathsep.join(extra_paths) + os.pathsep + env.get("PATH", "")
-
-    cmd = ["npm", "run", "tauri", "build", "--", "--no-bundle"]
-    print(f"Running: {' '.join(cmd)} in {TAURI_DIR}")
-    res = subprocess.run(cmd, cwd=TAURI_DIR, env=env, shell=True)
-    if res.returncode == 0:
-        exe_path = os.path.join(TAURI_DIR, "src-tauri", "target", "release", "tandem.exe")
-        print("\n[OK] Tauri 2.0 Build Successful!")
-        if os.path.exists(exe_path):
-            size_mb = os.path.getsize(exe_path) / (1024 * 1024)
-            print(f"Binary: {exe_path} ({size_mb:.2f} MB)")
-    else:
-        print(f"\n[FAILED] Tauri build failed with exit code: {res.returncode}")
+ROOT = Path(__file__).resolve().parent
+UI = ROOT / "tandem-ui"
 
 
-def build_pyinstaller():
-    print("=== Building Tandem Legacy Executable (PyInstaller) ===")
-    bin_dir = os.path.join(BASE_DIR, "bin")
-    assets_dir = os.path.join(BASE_DIR, "turbobond", "assets")
-    icon_ico = os.path.join(assets_dir, "icon.ico")
-
-    cmd = [
-        sys.executable, "-m", "PyInstaller",
-        "--name=Tandem",
-        "--windowed",
-        f"--add-data={bin_dir}{SEP}bin",
-        f"--add-data={assets_dir}{SEP}turbobond/assets",
-        "--hidden-import=customtkinter",
-        "--hidden-import=pystray",
-        "--hidden-import=PIL",
-        "--hidden-import=websockets",
-        "--clean",
-        "--noconfirm",
-        "main.py"
-    ]
-
-    if sys.platform.startswith("win"):
-        cmd.insert(4, "--uac-admin")
-        if os.path.exists(icon_ico):
-            cmd.insert(4, f"--icon={icon_ico}")
-
-    print("Running PyInstaller command:")
-    print(" ".join(cmd))
-    res = subprocess.run(cmd, cwd=BASE_DIR)
-    if res.returncode == 0:
-        print(f"\n[OK] Build Successful!")
-        print(f"Output: {os.path.join(BASE_DIR, 'dist', 'Tandem')}")
-    else:
-        print(f"\n[FAILED] PyInstaller build failed with exit code: {res.returncode}")
+def build_sidecar():
+    separator = ";" if os.name == "nt" else ":"
+    subprocess.run([sys.executable, "-m", "PyInstaller", "--noconfirm", "--onedir",
+        "--name", "tandem-sidecar", "--console", "--collect-all", "websockets",
+        "--add-data", f"{ROOT / 'bin'}{separator}bin", str(ROOT / "main.py")], cwd=ROOT, check=True)
+    directory = ROOT / "dist" / "tandem-sidecar"
+    config = {"bundle": {"resources": {str(directory).replace("\\", "/") + "/": "sidecar/"}}}
+    path = UI / "src-tauri" / "tauri.release.generated.json"
+    path.write_text(json.dumps(config, indent=2), encoding="utf-8")
+    executable = directory / ("tandem-sidecar.exe" if os.name == "nt" else "tandem-sidecar")
+    subprocess.run([str(executable), "--check"], cwd=ROOT, check=True)
+    return path
 
 
 def main():
-    if "--pyinstaller" in sys.argv or "--legacy" in sys.argv:
-        build_pyinstaller()
-    else:
-        build_tauri()
-
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--sidecar-only", action="store_true")
+    parser.add_argument("--legacy", "--pyinstaller", action="store_true", dest="legacy")
+    args = parser.parse_args()
+    if args.legacy:
+        separator = ";" if os.name == "nt" else ":"
+        subprocess.run([sys.executable, "-m", "PyInstaller", "--noconfirm", "--windowed", "--name", "Tandem-Legacy",
+            "--add-data", f"{ROOT / 'bin'}{separator}bin", "--add-data", f"{ROOT / 'turbobond/assets'}{separator}turbobond/assets",
+            str(ROOT / "scripts/legacy_main.py")], cwd=ROOT, check=True)
+        return
+    config = build_sidecar()
+    if args.sidecar_only:
+        return
+    npm = shutil.which("npm.cmd" if os.name == "nt" else "npm")
+    if not npm:
+        raise RuntimeError("Node.js/npm is required to build the desktop")
+    subprocess.run([npm, "run", "tauri", "--", "build", "--config", str(config)], cwd=UI, check=True)
 
 if __name__ == "__main__":
     main()

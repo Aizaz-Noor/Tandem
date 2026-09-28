@@ -25,7 +25,7 @@ from turbobond.core.system_proxy import SystemProxyConfig
 def _emergency_cleanup(signum=None, frame=None):
     """Recover settings left by dead Tandem sessions without touching other proxies."""
     try:
-        SystemProxyConfig.cleanup_orphaned_proxy()
+        SystemProxyConfig.cleanup_orphaned_proxy(clean_current=True)
     except Exception:
         pass
     if signum is not None:
@@ -47,6 +47,7 @@ def run_sidecar():
     """Start the JSON-RPC WebSocket sidecar server (no GUI)."""
     import asyncio
     from turbobond.core.rpc_server import TandemRPCServer
+    from turbobond.core.system_proxy import _pid_alive
 
     # Promote AppUserModelID so the Tauri window groups correctly
     if sys.platform.startswith("win"):
@@ -62,6 +63,7 @@ def run_sidecar():
 
     import json
     import threading
+    import time
     server = TandemRPCServer(port=int(os.environ.get("TANDEM_RPC_PORT", "7878")))
     managed = os.environ.get("TANDEM_MANAGED") == "1"
     def ready(info):
@@ -69,9 +71,22 @@ def run_sidecar():
         print(json.dumps(info), flush=True)
         if managed:
             def watch_parent():
-                # A shutdown line OR parent pipe EOF both trigger graceful cleanup.
-                sys.stdin.readline()
-                server.request_shutdown()
+                parent_pid = os.getppid()
+
+                def read_stdin():
+                    try:
+                        sys.stdin.readline()
+                    except Exception:
+                        pass
+                    server.request_shutdown()
+
+                threading.Thread(target=read_stdin, daemon=True).start()
+                while not server._shutdown.is_set():
+                    if parent_pid > 0 and not _pid_alive(parent_pid):
+                        server.request_shutdown()
+                        break
+                    time.sleep(1)
+
             threading.Thread(target=watch_parent, daemon=True).start()
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: server.request_shutdown())
@@ -111,6 +126,18 @@ def run_legacy_ui():
 def main():
     # CLI flag handling
     args = sys.argv[1:]
+    if "--check" in args:
+        # Packaging check: imports and bundled assets only; no OS/network mutation.
+        atexit.unregister(_emergency_cleanup)
+        import json
+        import websockets
+        from turbobond.core.rpc_server import TandemRPCServer
+        from turbobond.core.engine_manager import locate_engine_binary
+        engine = locate_engine_binary()
+        if not engine:
+            raise RuntimeError("Bundled VPN engine is missing")
+        print(json.dumps({"ok": True, "engine": engine, "websockets": websockets.__version__}))
+        return
 
     if "--reset-proxy" in args or "--clean" in args:
         print("[Tandem] Resetting system proxy to Direct Internet…")

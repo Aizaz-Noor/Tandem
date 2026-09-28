@@ -10,6 +10,7 @@ import time
 import shutil
 import threading
 import subprocess
+from turbobond.core.process_job import ProcessJob
 from enum import Enum
 from typing import List, Callable, Optional
 
@@ -105,15 +106,25 @@ class EngineManager:
         self.last_log_line = ""
         self.auto_reconnect = False
         self._last_start_args = None
+        self._generation = 0
+        self._job = None
+        self._lifecycle_lock = threading.RLock()
         from collections import deque
         self.log_buffer = deque(maxlen=200)
 
     def _set_state(self, new_state: TunnelState, message: str = ""):
         self.state = new_state
         if self.on_state_change:
-            self.on_state_change(new_state, message)
+            try:
+                self.on_state_change(new_state, message)
+            except Exception as exc:
+                print(f"[Engine] State callback failed: {exc}", file=sys.stderr)
 
-    def start(
+    def start(self, *args, **kwargs):
+        with self._lifecycle_lock:
+            return self._start(*args, **kwargs)
+
+    def _start(
         self,
         server_host: str,
         server_port: int,
@@ -159,6 +170,8 @@ class EngineManager:
             'auth_key': auth_key, 'adapter_names': adapter_names,
             'scheduler': scheduler, 'insecure': insecure, 'dns_servers': dns_servers
         }
+        self._generation += 1
+        generation = self._generation
         self._stop_requested = False
         self._set_state(TunnelState.CONNECTING, f"Connecting via {len(adapter_names)} adapters...")
 
@@ -168,6 +181,9 @@ class EngineManager:
             creationflags = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
 
         try:
+            if self._job:
+                self._job.close()
+            self._job = ProcessJob()
             bin_dir = os.path.dirname(bin_path)
             self.process = subprocess.Popen(
                 cmd,
@@ -179,36 +195,47 @@ class EngineManager:
                 creationflags=creationflags
             )
 
-            self.reader_thread = threading.Thread(target=self._read_output, daemon=True)
+            self._job.assign(self.process)
+            self.reader_thread = threading.Thread(target=self._read_output, args=(self.process, generation), daemon=True)
             self.reader_thread.start()
 
             # Start connection timeout watchdog
-            self._timeout_thread = threading.Thread(target=self._connection_timeout_watchdog, daemon=True)
+            self._timeout_thread = threading.Thread(target=self._connection_timeout_watchdog, kwargs={"generation": generation}, daemon=True)
             self._timeout_thread.start()
 
             return True
 
         except Exception as e:
+            self.stop()
             self._set_state(TunnelState.ERROR, f"Launch failed: {str(e)}")
             return False
 
-    def _connection_timeout_watchdog(self, timeout: int = 30):
+    def _connection_timeout_watchdog(self, timeout: int = 30, generation=None):
         """Transition to ERROR if not connected within timeout seconds."""
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            if self._stop_requested or self.state == TunnelState.CONNECTED:
+        generation = self._generation if generation is None else generation
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if generation != self._generation or self._stop_requested or self.state == TunnelState.CONNECTED:
                 return
             if self.state in [TunnelState.ERROR, TunnelState.DISCONNECTED]:
                 return
             time.sleep(1)
         # Timed out
-        if self.state == TunnelState.CONNECTING:
-            self._set_state(TunnelState.ERROR, f"Connection timed out after {timeout}s. Check server address and firewall.")
-            self.stop()
+        with self._lifecycle_lock:
+            if generation == self._generation and self.state == TunnelState.CONNECTING:
+                self._set_state(TunnelState.ERROR, f"Connection timed out after {timeout}s. Check server address and firewall.")
+                # Let the reader observe termination and perform configured reconnect.
+                if self.process:
+                    self.process.terminate()
 
     def stop(self):
+        with self._lifecycle_lock:
+            return self._stop()
+
+    def _stop(self):
         """Gracefully terminate the tunnel process."""
         self._stop_requested = True
+        self._generation += 1
         if self.process:
             try:
                 self.process.terminate()
@@ -216,26 +243,34 @@ class EngineManager:
                     self.process.wait(timeout=3)
                 except subprocess.TimeoutExpired:
                     self.process.kill()
+                    self.process.wait(timeout=3)
             except Exception as e:
                 print(f"[Engine] Stop error: {e}", file=sys.stderr)
             finally:
                 self.process = None
 
+        if self._job:
+            self._job.close()
+            self._job = None
         self._set_state(TunnelState.DISCONNECTED, "Disconnected")
 
-    def _read_output(self):
+    def _read_output(self, proc=None, generation=None):
         """Continuously read process stdout/stderr to detect connection status."""
-        proc = self.process
+        proc = proc or self.process
+        generation = self._generation if generation is None else generation
         if proc is None:
             return
-        while proc.poll() is None:
+        while generation == self._generation:
             try:
                 line = proc.stdout.readline()
             except Exception:
                 break
-            if not line:
+            if not line or generation != self._generation:
                 break
             line_str = line.strip()
+            secret = (self._last_start_args or {}).get("auth_key", "")
+            if secret:
+                line_str = line_str.replace(secret, "[redacted]")
             self.last_log_line = line_str
             self.log_buffer.append(line_str)
 
@@ -252,8 +287,16 @@ class EngineManager:
             elif any(k in lower for k in ["fatal", "panic", "iface pin failed", "auth failed", "permission denied"]):
                 if not self._stop_requested:
                     self._set_state(TunnelState.ERROR, line_str)
+                    proc.terminate()
+                    break
 
-        exit_code = proc.poll()
+        if generation != self._generation:
+            return
+        try:
+            exit_code = proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            exit_code = proc.wait(timeout=3)
         if not self._stop_requested:
             if exit_code and exit_code != 0:
                 # Provide a human-friendly error message based on logs
@@ -274,5 +317,6 @@ class EngineManager:
         if not self._stop_requested and self.auto_reconnect and self._last_start_args:
             self._set_state(TunnelState.RECONNECTING, "Auto-reconnecting in 5s...")
             time.sleep(5)
-            if not self._stop_requested:
-                self.start(**self._last_start_args)
+            with self._lifecycle_lock:
+                if not self._stop_requested and generation == self._generation:
+                    self.start(**self._last_start_args)

@@ -1,5 +1,5 @@
 use std::{io::{BufRead, BufReader, Write}, process::{Child, Command, Stdio}, sync::{mpsc, Mutex}, time::{Duration, Instant}};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Manager};
 use tauri::tray::{TrayIconBuilder, TrayIconEvent};
 use serde::{Deserialize, Serialize};
 #[cfg(target_os = "windows")]
@@ -11,21 +11,56 @@ struct Sidecar { child: Child, connection: Connection }
 #[derive(Default)]
 struct SidecarState(Mutex<Option<Sidecar>>);
 
+#[cfg(target_os = "windows")]
+fn ensure_direct_internet() {
+    let _ = Command::new("cmd")
+        .args(["/c", "reg add \"HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings\" /v ProxyEnable /t REG_DWORD /d 0 /f"])
+        .creation_flags(0x08000000)
+        .output();
+    let _ = Command::new("cmd")
+        .args(["/c", "reg delete \"HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings\" /v TandemProxyBackup /f"])
+        .creation_flags(0x08000000)
+        .output();
+}
+
 fn sidecar_command(app: &AppHandle) -> Result<Command, String> {
-    if cfg!(debug_assertions) {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let python = std::env::var_os("TANDEM_PYTHON").unwrap_or_else(|| "python".into());
-        let mut cmd = Command::new(python);
-        cmd.arg(root.join("main.py")).arg("--sidecar").current_dir(root);
-        Ok(cmd)
-    } else {
-        let name = if cfg!(windows) { "tandem-sidecar.exe" } else { "tandem-sidecar" };
-        let path = app.path().resource_dir().map_err(|e| e.to_string())?.join("sidecar").join(name);
-        if !path.is_file() { return Err("Packaged backend is missing. Reinstall Tandem.".into()); }
-        let mut cmd = Command::new(path);
-        cmd.arg("--sidecar");
-        Ok(cmd)
+    let name = if cfg!(windows) { "tandem-sidecar.exe" } else { "tandem-sidecar" };
+
+    // Check candidate paths for pre-packaged sidecar binary
+    let candidates = [
+        app.path().resource_dir().ok().map(|d| d.join("sidecar").join(name)),
+        std::env::current_exe().ok().and_then(|e| e.parent().map(|p| p.join(name))),
+        std::env::current_exe().ok().and_then(|e| e.parent().map(|p| p.join("sidecar").join(name))),
+    ];
+
+    for candidate in candidates.into_iter().flatten() {
+        if candidate.is_file() {
+            let mut cmd = Command::new(candidate);
+            cmd.arg("--sidecar");
+            return Ok(cmd);
+        }
     }
+
+    // Fall back to python script
+    let roots = [
+        std::env::current_exe().ok().and_then(|e| e.parent().map(|p| p.to_path_buf())),
+        std::env::current_exe().ok().and_then(|e| e.parent().and_then(|p| p.parent()).map(|p| p.to_path_buf())),
+        std::env::current_exe().ok().and_then(|e| e.parent().and_then(|p| p.parent()).and_then(|p| p.parent()).map(|p| p.to_path_buf())),
+        std::env::current_exe().ok().and_then(|e| e.parent().and_then(|p| p.parent()).and_then(|p| p.parent()).and_then(|p| p.parent()).map(|p| p.to_path_buf())),
+        Some(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")),
+    ];
+
+    for root in roots.into_iter().flatten() {
+        let script = root.join("main.py");
+        if script.is_file() {
+            let python = std::env::var_os("TANDEM_PYTHON").unwrap_or_else(|| "python".into());
+            let mut cmd = Command::new(python);
+            cmd.arg(&script).arg("--sidecar").current_dir(root);
+            return Ok(cmd);
+        }
+    }
+
+    Err("Packaged backend is missing. Reinstall Tandem.".into())
 }
 
 fn stop_child(child: &mut Child) {
@@ -79,6 +114,8 @@ fn connect_sidecar(app: &AppHandle, state: &SidecarState) -> Result<Connection, 
         }
         Err(_) => {
             stop_child(&mut child);
+            #[cfg(target_os = "windows")]
+            ensure_direct_internet();
             Err("Backend did not become ready. Check Python dependencies or reinstall Tandem.".into())
         }
     }
@@ -101,6 +138,8 @@ pub fn run() {
     let app = tauri::Builder::default()
         .manage(SidecarState::default())
         .setup(|app| {
+            #[cfg(target_os = "windows")]
+            ensure_direct_internet();
             if let Some(icon) = app.default_window_icon().cloned() {
                 TrayIconBuilder::new().icon(icon).tooltip("Tandem")
                     .on_tray_icon_event(|tray, event| {
@@ -118,8 +157,13 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("Cannot initialize Tandem");
     app.run(|app, event| {
-        if let tauri::RunEvent::ExitRequested { .. } = event {
-            stop_sidecar(&app.state::<SidecarState>());
+        match event {
+            tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
+                stop_sidecar(&app.state::<SidecarState>());
+                #[cfg(target_os = "windows")]
+                ensure_direct_internet();
+            }
+            _ => {}
         }
     });
 }

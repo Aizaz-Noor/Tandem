@@ -940,12 +940,14 @@ class MainWindow(ctk.CTk):
                     host='127.0.0.1',
                     port=proxy_port,
                     adapter_ips=adapter_ips,
-                    strategy=strategy
+                    strategy=strategy,
+                    adapter_weights={ip_by_name[name]: self.config.get("adapter_weights", {}).get(name, 1) for name in selected}
                 )
                 self.dispatcher.start_in_thread(timeout=3.0)
 
                 if self.config.get("auto_system_proxy", True):
-                    self.system_proxy.enable_proxy('127.0.0.1', proxy_port)
+                    if not self.system_proxy.enable_proxy('127.0.0.1', proxy_port):
+                        raise RuntimeError('Could not configure the system proxy')
 
                 if not self._closing:
                     try:

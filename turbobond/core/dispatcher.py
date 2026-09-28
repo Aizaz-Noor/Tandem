@@ -54,9 +54,11 @@ class LocalDispatcher:
                         'bytes_tx': 0
                     }
 
-    def update_adapters(self, adapter_ips: List[str]):
+    def update_adapters(self, adapter_ips: List[str], adapter_weights=None):
         with self._lock:
             self.adapter_ips = list(adapter_ips)
+            if adapter_weights is not None:
+                self.adapter_weights = dict(adapter_weights)
             # Initialize stats for new adapters
             for ip in self.adapter_ips:
                 if ip not in self._stats:
@@ -140,14 +142,15 @@ class LocalDispatcher:
             print(f"[Dispatcher] Failed to start server: {e}", file=sys.stderr)
 
     async def stop(self):
-        if self._server:
-            self._server.close()
-            await self._server.wait_closed()
-            self._server = None
+        server, self._server = self._server, None
+        if server:
+            server.close()
         tasks = [t for t in self._clients if t is not asyncio.current_task()]
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        if server:
+            await server.wait_closed()
         if self._stop_event:
             self._stop_event.set()
         print("[Dispatcher] Server stopped")
@@ -229,9 +232,9 @@ class LocalDispatcher:
     async def _handle_socks5(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, initial_byte: bytes):
         try:
             # SOCKS5 greeting
-            nmethods_data = await reader.readexactly(1)
+            nmethods_data = await asyncio.wait_for(reader.readexactly(1), 30)
             nmethods = nmethods_data[0]
-            methods = await reader.readexactly(nmethods)
+            methods = await asyncio.wait_for(reader.readexactly(nmethods), 30)
             
             if 0 not in methods:
                 writer.write(b'\x05\xff')
@@ -242,7 +245,7 @@ class LocalDispatcher:
             await writer.drain()
 
             # Connect request
-            req_header = await reader.readexactly(4)
+            req_header = await asyncio.wait_for(reader.readexactly(4), 30)
             version, cmd, rsv, atyp = req_header
 
             if version != 5 or rsv != 0:
@@ -255,22 +258,22 @@ class LocalDispatcher:
             # Parse destination
             dst_addr = ""
             if atyp == 0x01: # IPv4
-                addr_data = await reader.readexactly(4)
+                addr_data = await asyncio.wait_for(reader.readexactly(4), 30)
                 dst_addr = socket.inet_ntoa(addr_data)
             elif atyp == 0x03: # Domain
-                domain_len_data = await reader.readexactly(1)
+                domain_len_data = await asyncio.wait_for(reader.readexactly(1), 30)
                 domain_len = domain_len_data[0]
-                addr_data = await reader.readexactly(domain_len)
+                addr_data = await asyncio.wait_for(reader.readexactly(domain_len), 30)
                 dst_addr = addr_data.decode('utf-8')
             elif atyp == 0x04: # IPv6
-                addr_data = await reader.readexactly(16)
+                addr_data = await asyncio.wait_for(reader.readexactly(16), 30)
                 dst_addr = socket.inet_ntop(socket.AF_INET6, addr_data)
             else:
                 writer.write(b'\x05\x08\x00\x01\x00\x00\x00\x00\x00\x00')
                 await writer.drain()
                 raise Exception("Unsupported SOCKS5 ATYP")
 
-            port_data = await reader.readexactly(2)
+            port_data = await asyncio.wait_for(reader.readexactly(2), 30)
             dst_port = struct.unpack('!H', port_data)[0]
 
             await self._connect_and_relay(reader, writer, dst_addr, dst_port, is_socks=True)
@@ -471,6 +474,9 @@ class LocalDispatcher:
                 while True:
                     data = await src.read(32768)
                     if not data:
+                        if dst.can_write_eof():
+                            dst.write_eof()
+                            await dst.drain()
                         break
                     if is_tx:
                         self._update_stat(adapter_ip, 'bytes_tx', len(data), relative=True)
@@ -480,8 +486,6 @@ class LocalDispatcher:
                     dst.write(data)
                     await dst.drain()
             except Exception:
-                pass
-            finally:
                 dst.close()
 
         task1 = asyncio.create_task(forward(r1, w2, is_tx=True))

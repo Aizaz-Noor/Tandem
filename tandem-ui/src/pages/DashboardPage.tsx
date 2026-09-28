@@ -16,7 +16,7 @@ interface DashboardPageProps {
 
 export function DashboardPage({ state, onStart, onStop, onRefresh, onSelect }: DashboardPageProps) {
   const selected = new Set(state.config?.selected_adapters ?? []);
-  const running = state.bondingActive || ["CONNECTING", "CONNECTED", "RECONNECTING"].includes(state.engineState);
+  const running = state.bondingActive || state.engineState !== "DISCONNECTED";
   const toggleAdapter = (name: string) => {
     if (running || state.loading || !state.connected) return;
     const next = new Set(selected);
@@ -80,7 +80,7 @@ export function DashboardPage({ state, onStart, onStop, onRefresh, onSelect }: D
                 <AdapterCard
                   key={adapter.name}
                   adapter={adapter}
-                  selected={selected.size === 0 || selected.has(adapter.name)}
+                  selected={selected.has(adapter.name)}
                   disabled={running || state.loading || !state.connected}
                   rxMbps={adapterTelemetry?.rx_mbps ?? 0}
                   txMbps={adapterTelemetry?.tx_mbps ?? 0}
