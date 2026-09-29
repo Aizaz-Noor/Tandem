@@ -27,6 +27,7 @@ tandem-ui/src-tauri/gen/
 # ─── IDE & Editors ────────────────────────────────────────────────────────────
 .vscode/
 .idea/
+.kilo/
 *.swp
 *.swo
 
