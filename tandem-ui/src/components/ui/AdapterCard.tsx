@@ -59,7 +59,8 @@ export function AdapterCard({ adapter, selected, disabled = false, rxMbps = 0, t
       onKeyDown={e => { if (!disabled && (e.key === " " || e.key === "Enter")) { e.preventDefault(); onToggle(adapter.name); } }}
       onClick={() => { if (!disabled) onToggle(adapter.name); }}
       className={cn(
-        "card glass-hover cursor-pointer select-none transition-all duration-200",
+        "card glass-hover select-none transition-all duration-200",
+        disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer",
         selected
           ? "border-brand-500/50 bg-brand-600/10"
           : "hover:border-white/20"

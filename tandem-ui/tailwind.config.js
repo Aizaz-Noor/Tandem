@@ -8,17 +8,17 @@ export default {
     extend: {
       colors: {
         brand: {
-          50:  "#f0f4ff",
-          100: "#e0eaff",
-          200: "#c7d7fe",
-          300: "#a5bcfc",
-          400: "#818cf8",
-          500: "#6366f1",
-          600: "#4f46e5",
-          700: "#4338ca",
-          800: "#3730a3",
-          900: "#312e81",
-          950: "#1e1b4b",
+          50:  "#f0f9ff",
+          100: "#e0f2fe",
+          200: "#bae6fd",
+          300: "#7dd3fc",
+          400: "#38bdf8",
+          500: "#0ea5e9",
+          600: "#0284c7",
+          700: "#0369a1",
+          800: "#075985",
+          900: "#0c4a6e",
+          950: "#082f49",
         },
         glass: {
           bg:     "rgba(255,255,255,0.06)",
@@ -50,8 +50,8 @@ export default {
       },
       keyframes: {
         glow: {
-          "0%":   { "box-shadow": "0 0 8px rgba(99,102,241,0.4)" },
-          "100%": { "box-shadow": "0 0 24px rgba(99,102,241,0.8)" },
+          "0%":   { "box-shadow": "0 0 8px rgba(14,165,233,0.4)" },
+          "100%": { "box-shadow": "0 0 24px rgba(14,165,233,0.8)" },
         },
         slideIn: {
           "0%":   { transform: "translateX(-100%)", opacity: "0" },
@@ -67,7 +67,7 @@ export default {
           "radial-gradient(at 27% 37%, hsla(215,98%,61%,0.15) 0px, transparent 50%)," +
           "radial-gradient(at 97% 21%, hsla(125,98%,72%,0.08) 0px, transparent 50%)," +
           "radial-gradient(at 52% 99%, hsla(354,98%,61%,0.08) 0px, transparent 50%)," +
-          "radial-gradient(at 10% 29%, hsla(256,96%,67%,0.12) 0px, transparent 50%)",
+          "radial-gradient(at 10% 29%, hsla(189,96%,67%,0.12) 0px, transparent 50%)",
       },
     },
   },

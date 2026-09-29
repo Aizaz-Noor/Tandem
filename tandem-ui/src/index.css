@@ -70,8 +70,8 @@ body {
   }
   .nav-item.active {
     @apply text-white;
-    background: rgba(99,102,241,0.20);
-    border-color: rgba(99,102,241,0.35);
+    background: rgba(14,165,233,0.16);
+    border-color: rgba(14,165,233,0.32);
   }
   .nav-item.active svg { @apply text-brand-400; }
 
@@ -113,17 +113,17 @@ body {
     radial-gradient(at 27% 37%, hsla(215,98%,61%,0.15) 0px, transparent 50%),
     radial-gradient(at 97% 21%, hsla(125,98%,72%,0.06) 0px, transparent 50%),
     radial-gradient(at 52% 99%, hsla(354,98%,61%,0.06) 0px, transparent 50%),
-    radial-gradient(at 10% 29%, hsla(256,96%,67%,0.10) 0px, transparent 50%);
+    radial-gradient(at 10% 29%, hsla(189,96%,67%,0.10) 0px, transparent 50%);
 }
 
-/* ─── Drag region for custom titlebar ───────────────────────────── */
-[data-tauri-drag-region] {
-  cursor: move;
-  -webkit-app-region: drag;
-}
-button[data-tauri-drag-region="false"],
-a[data-tauri-drag-region="false"] {
-  -webkit-app-region: no-drag;
+/* ─── Keyboard focus ─────────────────────────────────────────────── */
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+[role="checkbox"]:focus-visible {
+  outline: 2px solid #38bdf8;
+  outline-offset: 2px;
 }
 
 /* ─── Range input styling ────────────────────────────────────────── */
@@ -140,9 +140,9 @@ input[type="range"]::-webkit-slider-thumb {
   width: 14px;
   height: 14px;
   border-radius: 50%;
-  background: #6366f1;
+  background: #0ea5e9;
   cursor: pointer;
-  box-shadow: 0 0 0 3px rgba(99,102,241,0.25);
+  box-shadow: 0 0 0 3px rgba(14,165,233,0.25);
 }
 
 /* ─── Toggle switch ──────────────────────────────────────────────── */

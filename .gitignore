@@ -15,6 +15,7 @@ htmlcov/
 dist/
 build/
 *.spec
+release/
 
 # ─── Tauri / Node (tandem-ui) ─────────────────────────────────────────────────
 tandem-ui/node_modules/

@@ -1,8 +1,5 @@
 import asyncio
-import socket
 import struct
-import threading
-import time
 from typing import Optional
 
 import pytest
@@ -77,18 +74,18 @@ def test_get_stats_tracking():
     assert total_stats['bytes_tx'] == 512
 
 
-def test_socks5_handshake(free_tcp_port):
+def test_socks5_handshake():
     async def run_test():
-        dispatcher = LocalDispatcher(host='127.0.0.1', port=free_tcp_port, adapter_ips=['127.0.0.1'])
+        dispatcher = LocalDispatcher(host='127.0.0.1', port=0, adapter_ips=['127.0.0.1'])
         
         # Start dispatcher in the background task
         task = asyncio.create_task(dispatcher.start())
         
-        # Give it a moment to start
-        await asyncio.sleep(0.1)
+        assert await asyncio.to_thread(dispatcher._started_event.wait, 3)
+        proxy_port = dispatcher._server.sockets[0].getsockname()[1]
         
         try:
-            reader, writer = await asyncio.open_connection('127.0.0.1', free_tcp_port)
+            reader, writer = await asyncio.open_connection('127.0.0.1', proxy_port)
             
             # SOCKS5 greeting
             writer.write(b'\x05\x01\x00') # version 5, 1 method, method 0 (NO AUTH)
@@ -106,12 +103,13 @@ def test_socks5_handshake(free_tcp_port):
     asyncio.run(run_test())
 
 
-def test_http_connect(free_tcp_port):
+def test_http_connect():
     async def run_test():
-        dispatcher = LocalDispatcher(host='127.0.0.1', port=free_tcp_port, adapter_ips=['127.0.0.1'])
+        dispatcher = LocalDispatcher(host='127.0.0.1', port=0, adapter_ips=['127.0.0.1'])
         
         task = asyncio.create_task(dispatcher.start())
-        await asyncio.sleep(0.1)
+        assert await asyncio.to_thread(dispatcher._started_event.wait, 3)
+        proxy_port = dispatcher._server.sockets[0].getsockname()[1]
         
         # Simple echo server to act as a target
         target_server = await asyncio.start_server(
@@ -120,7 +118,7 @@ def test_http_connect(free_tcp_port):
         target_port = target_server.sockets[0].getsockname()[1]
         
         try:
-            reader, writer = await asyncio.open_connection('127.0.0.1', free_tcp_port)
+            reader, writer = await asyncio.open_connection('127.0.0.1', proxy_port)
             
             writer.write(f'CONNECT 127.0.0.1:{target_port} HTTP/1.1\r\nHost: 127.0.0.1:{target_port}\r\n\r\n'.encode('utf-8'))
             await writer.drain()
@@ -139,11 +137,11 @@ def test_http_connect(free_tcp_port):
     asyncio.run(run_test())
 
 
-def test_start_stop_thread(free_tcp_port):
-    dispatcher = LocalDispatcher(host='127.0.0.1', port=free_tcp_port, adapter_ips=['127.0.0.1'])
+def test_start_stop_thread():
+    dispatcher = LocalDispatcher(host='127.0.0.1', port=0, adapter_ips=['127.0.0.1'])
     
     dispatcher.start_in_thread()
-    time.sleep(0.2)
+    assert dispatcher._started_event.wait(3)
     
     assert dispatcher._thread is not None
     assert dispatcher._thread.is_alive()

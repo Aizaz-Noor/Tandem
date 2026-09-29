@@ -18,6 +18,7 @@ npm run tauri dev
 ```
 
 Use `python main.py --legacy-ui` for the legacy interface. Running `python main.py` starts only the sidecar. The sidecar is launched automatically by the Tauri app.
+On Windows, `run.bat` launches an existing local release build or builds one first. Install the MSI or NSIS package to test the actual shipped layout.
 
 Configuration is stored in `%APPDATA%\TurboBond\config.json` on Windows or `~/.config/turbobond/config.json` on Linux. Local mode defaults to port 8080 and can configure the system proxy. Automatic connection on launch is off by default. Cloud mode has no preset server and verifies the server certificate by default. The UI has an explicit option to allow an unverified certificate for servers using self-signed certificates; this weakens protection against interception.
 
@@ -43,6 +44,7 @@ If the app exits while it owns the Windows proxy, the next launch attempts to re
 ## Server deployment
 
 `scripts/setup_vps.sh` is an example Ubuntu server setup script. It downloads mqvpn v0.16.3 for amd64 or arm64 and verifies the published SHA-256 before installation. Review its Docker image and firewall settings before running it on a production host. It creates a self-signed certificate; clients must explicitly opt into unverified certificates unless a trusted certificate is configured.
+If this script was used, the server auth key and listening port are in `/opt/turbobond-server/config/server.conf` on the VPS. Keep that file private. A cloud release test needs the actual server values; the public VM IP alone cannot establish an authenticated tunnel.
 
 ## License
 

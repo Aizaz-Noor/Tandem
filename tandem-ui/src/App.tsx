@@ -14,6 +14,12 @@ const PAGE_VARIANTS = {
   exit:     { opacity: 0, x: -10 },
 };
 
+const PAGE_TITLES: Record<Page, { title: string; detail: string }> = {
+  dashboard: { title: "Dashboard", detail: "Connection overview" },
+  settings: { title: "Settings", detail: "Network and cloud configuration" },
+  logs: { title: "Activity log", detail: "Connection events and diagnostics" },
+};
+
 export default function App() {
   const [page, setPage] = useState<Page>("dashboard");
   const { state, startBonding, stopBonding, refreshAdapters, saveConfig, resetProxy, clearLogs } = useTandem();
@@ -30,15 +36,17 @@ export default function App() {
 
       {/* Main content */}
       <main className="flex-1 flex flex-col overflow-hidden">
-        {/* Page header */}
-        <div
-          data-tauri-drag-region="true"
-          className="h-10 flex items-center px-6 border-b border-white/8 bg-black/10"
-        >
-          <span className="text-xs font-semibold text-slate-400 uppercase tracking-widest select-none">
-            {page === "dashboard" ? "Dashboard" : page === "settings" ? "Settings" : "Logs"}
+        <header className="min-h-20 flex items-center justify-between gap-4 px-6 border-b border-white/10 bg-black/10">
+          <div>
+            <h1 className="text-lg font-semibold text-white">{PAGE_TITLES[page].title}</h1>
+            <p className="text-xs text-slate-400 mt-0.5">{PAGE_TITLES[page].detail}</p>
+          </div>
+          <span className={`shrink-0 text-xs font-medium px-3 py-1.5 rounded-full border ${state.connected
+            ? "text-emerald-300 bg-emerald-400/10 border-emerald-400/20"
+            : "text-slate-400 bg-white/5 border-white/10"}`}>
+            {state.connected ? "Backend ready" : "Backend offline"}
           </span>
-        </div>
+        </header>
 
         {state.error && <div role="alert" className="mx-6 mt-3 text-sm text-red-300">{state.error}</div>}
         {/* Animated page body */}

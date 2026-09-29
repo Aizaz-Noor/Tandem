@@ -102,7 +102,7 @@ export function DashboardPage({ state, onStart, onStop, onRefresh, onSelect }: D
             "text-xs font-medium px-2 py-0.5 rounded-md border",
             state.config.mode === "local_dispatcher"
               ? "text-brand-400 bg-brand-500/10 border-brand-500/25"
-              : "text-violet-400 bg-violet-500/10 border-violet-500/25"
+              : "text-emerald-400 bg-emerald-500/10 border-emerald-500/25"
           )}>
             {state.config.mode === "local_dispatcher" ? "Local Dispatcher" : "Cloud Bonding"}
           </span>
@@ -124,7 +124,7 @@ export function DashboardPage({ state, onStart, onStop, onRefresh, onSelect }: D
         />
         {!state.connected && (
           <p className="text-center text-xs text-slate-600 mt-2">
-            Waiting for sidecar connection on :7878…
+            Connecting to the Tandem backend…
           </p>
         )}
       </div>

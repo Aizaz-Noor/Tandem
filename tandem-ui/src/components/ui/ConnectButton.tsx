@@ -36,7 +36,7 @@ export function ConnectButton({ active, loading, disabled, onClick }: ConnectBut
       {!active && (
         <motion.div
           className="absolute inset-0 rounded-2xl"
-          animate={{ boxShadow: ["0 0 0px rgba(99,102,241,0)", "0 0 20px rgba(99,102,241,0.3)", "0 0 0px rgba(99,102,241,0)"] }}
+          animate={{ boxShadow: ["0 0 0px rgba(14,165,233,0)", "0 0 20px rgba(14,165,233,0.3)", "0 0 0px rgba(14,165,233,0)"] }}
           transition={{ duration: 2.5, repeat: Infinity }}
         />
       )}
